@@ -1,0 +1,6 @@
+.vs/
+out/
+build/
+assets/meshes
+assets/spv
+#imgui.ini # explicitly do not ignore imgui.ini because there shouldn't be any
