@@ -22,7 +22,11 @@ add_executable(cutter)
 
 target_sources(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Camera.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Graphics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ShaderUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Stb.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VkUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Vma.cpp
 
@@ -33,6 +37,7 @@ target_sources(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/imgui_widgets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/backends/imgui_impl_glfw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/backends/imgui_impl_vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src/indexgenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src/quantization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vk-bootstrap/src/VkBootstrap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/volk/volk.c
@@ -46,6 +51,7 @@ target_include_directories(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glm
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/renderdoc/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/shaderc/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vk-bootstrap/src
@@ -60,6 +66,7 @@ target_compile_definitions(cutter PRIVATE
 
 if(WIN32)
     target_compile_definitions(cutter PRIVATE
+        NOMINMAX
         _CRT_SECURE_NO_WARNINGS
         WIN32_LEAN_AND_MEAN
         VK_USE_PLATFORM_WIN32_KHR
@@ -78,3 +85,6 @@ if(WIN32)
 else()
     # TODO
 endif()
+
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/misc/fonts/Roboto-Medium.ttf
+               ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Roboto-Medium.ttf COPYONLY)

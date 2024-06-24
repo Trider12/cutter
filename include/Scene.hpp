@@ -1,32 +1,38 @@
 #pragma once
 
 #include "../assets/shaders/common.h"
-#include "VKUtils.hpp"
+#include "Glm.hpp"
+#include "Graphics.hpp"
 
-#include <vector> // TODO: remove this from the header somehow
+#include <vector>
 
-#include <Glm.hpp>
+struct Image
+{
+    std::vector<char> data; // unpacked
+    uint32_t width = 0, height = 0;
+    bool sRGB = false;
+};
+
+struct MaterialTextureSet
+{
+    const char *colorTexPath;
+    const char *normalTexPath;
+    const char *aoRoughMetalTexPath;
+};
 
 struct Scene
 {
     std::vector<uint32_t> indices;
     std::vector<Position> positions;
     std::vector<NormalUv> normalUvs;
-    std::vector<glm::mat4> matrices;
-
-    uint32_t indexesSize;
-    uint32_t positionsSize;
-    uint32_t normalUvsSize;
-    uint32_t matricesSize;
-    uint32_t indicesOffset;
-    uint32_t positionsOffset;
-    uint32_t normalUvsOffset;
-    uint32_t matricesOffset;
-
-    AllocatedBuffer buffer;
+    std::vector<TransformData> transforms;
+    std::vector<MaterialData> materials;
+    std::vector<Image> images;
 };
 
-Scene loadSceneFromGltf(const char *filename);
+void addMaterialToScene(Scene &scene, const MaterialTextureSet &set);
+
+Scene importSceneFromGlb(const char *filename, float scale);
 
 Scene loadSceneFromFile(const char *filename);
 

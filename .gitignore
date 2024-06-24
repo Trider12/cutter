@@ -1,6 +1,8 @@
 .vs/
 out/
 build/
-assets/meshes
+assets/scenes
+assets/skyboxes
 assets/spv
+assets/fonts/Roboto-Medium.ttf
 #imgui.ini # explicitly do not ignore imgui.ini because there shouldn't be any

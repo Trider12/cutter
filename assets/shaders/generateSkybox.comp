@@ -1,0 +1,31 @@
+#include "utils.h"
+
+layout(local_size_x_id = 0, local_size_y_id = 0) in;
+
+layout(set = 0, binding = 0) uniform texture2D envTexture;
+layout(set = 0, binding = 1, rgba16f) uniform restrict writeonly image2DArray skyboxImage;
+layout(set = 0, binding = 2) uniform sampler linearRepeatSampler;
+
+vec4 sampleEnvTexture(vec3 pos)
+{
+    pos = normalize(pos);
+    float theta = acos(pos.y);
+    float phi = atan(pos.z, pos.x);
+    vec2 uv = vec2(phi * ONE_OVER_TWO_PI + 0.5f, theta * ONE_OVER_PI);
+    return texture(sampler2D(envTexture, linearRepeatSampler), uv);
+}
+
+void main()
+{
+    ivec2 skyboxSize = imageSize(skyboxImage).xy;
+    if(any(greaterThanEqual(gl_GlobalInvocationID.xy, skyboxSize)))
+        return;
+
+    vec2 pos = vec2(2.f, -2.f) * gl_GlobalInvocationID.xy / skyboxSize.xy + vec2(-1.f, 1.f);
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 0), sampleEnvTexture(vec3(1.f, pos.y, -pos.x)));
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 1), sampleEnvTexture(vec3(-1.f, pos.y, pos.x)));
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 2), sampleEnvTexture(vec3(pos.x, 1.f, -pos.y)));
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 3), sampleEnvTexture(vec3(pos.x, -1.f, pos.y)));
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 4), sampleEnvTexture(vec3(pos.x, pos.y, 1.f)));
+    imageStore(skyboxImage, ivec3(gl_GlobalInvocationID.xy, 5), sampleEnvTexture(vec3(-pos.x, pos.y, -1.f)));
+}

@@ -1,29 +1,36 @@
-#version 450
-#extension GL_GOOGLE_include_directive : require
+#include "globalDescriptorSet.h"
+#include "utils.h"
 
-#include "common.h"
-
-layout(std430, set = 0, binding = 0) readonly buffer Positions
+struct VsOut
 {
-    Position positions[];
+    vec3 pos;
+    vec3 norm;
+    vec3 bary;
+    vec2 uv;
+    uint transformIndex;
 };
 
-layout(std430, set = 0, binding = 1) readonly buffer NormalUvs
+layout(location = 0) out VsOutBlock
 {
-    NormalUv normalUvs[];
+    VsOut vsOut;
 };
 
-layout(std430, set = 0, binding = 2) readonly buffer Matrices
+void main()
 {
-    mat4 matrices[];
-};
+    uint index = indices[gl_VertexIndex];
+    vec4 pos = vec4(positions[index].x, positions[index].y, positions[index].z, 1.f);
+    vec4 norm = vec4(unpackSnorm8(ivec3(normalUvs[index].x, normalUvs[index].y, normalUvs[index].z)), 0.f);
+    vec2 uv = vec2(normalUvs[index].u, normalUvs[index].v);
+    uint transformIndex = uint(positions[index].transformIndex);
+    TransformData td = transforms[transformIndex];
+    mat4 modelMat = cameraData.sceneMat * td.toWorldMat;
+    mat4 mvp = cameraData.projMat * cameraData.viewMat * modelMat;
+    uint mod = gl_VertexIndex % 3;
 
-layout(location = 0) out vec3 outColor;
-
-void main() 
-{
-    vec3 pos = vec3(positions[gl_VertexIndex].x, positions[gl_VertexIndex].y, positions[gl_VertexIndex].z);
-    mat4 mat = matrices[int(positions[gl_VertexIndex].matrixIndex)];
-    gl_Position = mat * vec4(pos, 1.f);
-    outColor = vec3(1.f, 0.f, 0.f);
+    gl_Position = mvp * pos;
+    vsOut.pos = (modelMat * pos).xyz;
+    vsOut.norm = (modelMat * norm).xyz;
+    vsOut.uv = uv;
+    vsOut.bary = vec3(mod == 0, mod == 1, mod == 2);
+    vsOut.transformIndex = transformIndex;
 }

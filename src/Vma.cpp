@@ -1,6 +1,7 @@
-#include <volk/volk.h>
 #define VMA_IMPLEMENTATION
 #include "Vma.hpp"
+
+#include <volk/volk.h>
 
 VmaVulkanFunctions initVmaVulkanFunctions()
 {
