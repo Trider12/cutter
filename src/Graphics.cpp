@@ -105,7 +105,7 @@ void pipelineBarrier(VkCommandBuffer cmd,
     ImageBarrier *imageBarriers,
     uint32_t imageBarrierCount)
 {
-    VkBufferMemoryBarrier2 *bufferMemoryBarriers = bufferBarrierCount ? (VkBufferMemoryBarrier2 *)ALLOCA(bufferBarrierCount * sizeof(VkBufferMemoryBarrier2)) : nullptr;
+    VkBufferMemoryBarrier2 *bufferMemoryBarriers = bufferBarrierCount ? (VkBufferMemoryBarrier2 *)alloca(bufferBarrierCount * sizeof(VkBufferMemoryBarrier2)) : nullptr;
 
     for (uint32_t i = 0; i < bufferBarrierCount; i++)
     {
@@ -122,7 +122,7 @@ void pipelineBarrier(VkCommandBuffer cmd,
         bufferMemoryBarriers[i].size = VK_WHOLE_SIZE;
     }
 
-    VkImageMemoryBarrier2 *imageMemoryBarriers = imageBarrierCount ? (VkImageMemoryBarrier2 *)ALLOCA(imageBarrierCount * sizeof(VkImageMemoryBarrier2)) : nullptr;
+    VkImageMemoryBarrier2 *imageMemoryBarriers = imageBarrierCount ? (VkImageMemoryBarrier2 *)alloca(imageBarrierCount * sizeof(VkImageMemoryBarrier2)) : nullptr;
 
     for (uint32_t i = 0; i < imageBarrierCount; i++)
     {

@@ -1,57 +1,27 @@
 #include "Scene.hpp"
-#include "Stb.h"
+#include "ImageUtils.hpp"
 #include "VkUtils.hpp"
 
 #include <stack>
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
+#include <cwalk.h>
 #include <meshoptimizer.h>
 
-static Image importImage(const char *path)
+static const char *const sceneFileExtension = ".bin";
+static const char *const textureFileExtension = ".ktx2";
+
+static void importImage(const cgltf_image *image, const char *path, ImagePurpose purpose)
 {
-    ASSERT(EXISTS(path));
-    int x, y;
-    char *imageData = (char *)stbi_load(path, &x, &y, nullptr, STBI_rgb_alpha);
-    uint32_t imageDataSize = x * y * STBI_rgb_alpha;
-
-    Image img;
-    img.width = (uint32_t)x;
-    img.height = (uint32_t)y;
-    img.data.assign(imageData, imageData + imageDataSize);
-    stbi_image_free(imageData);
-
-    return img;
-}
-
-static Image importImage(const cgltf_image *image)
-{
-    int x, y;
-    unsigned char *data = (unsigned char *)image->buffer_view->buffer->data + image->buffer_view->offset;
+    uint8_t *data = (uint8_t *)image->buffer_view->buffer->data + image->buffer_view->offset;
     uint32_t dataSize = (uint32_t)image->buffer_view->size;
-    char *imageData = (char *)stbi_load_from_memory(data, dataSize, &x, &y, nullptr, STBI_rgb_alpha);
-    uint32_t imageDataSize = x * y * STBI_rgb_alpha;
-
-    Image img;
-    img.width = (uint32_t)x;
-    img.height = (uint32_t)y;
-    img.data.assign(imageData, imageData + imageDataSize);
-    stbi_image_free(imageData);
-
-    return img;
+    Image img = importImage(data, dataSize, purpose);
+    writeImage(img, path);
+    freeImage(img);
 }
 
-static void importImages(const cgltf_data *data, Scene &scene)
-{
-    scene.images.reserve(data->images_count);
-
-    for (cgltf_size i = 0; i < data->images_count; i++)
-    {
-        scene.images.push_back(importImage(data->images + i));
-    }
-}
-
-static void importMaterials(const cgltf_data *data, Scene &scene)
+static void importMaterials(const cgltf_data *data, Scene &scene, const char *sceneDirPath)
 {
     ASSERT(data->materials_count == 0 || data->materials_count == 1);
 
@@ -65,16 +35,30 @@ static void importMaterials(const cgltf_data *data, Scene &scene)
         return;
     }
 
+    char imagePath[256];
+    uint32_t imagePathSize = snprintf(imagePath, sizeof(imagePath), "%s/", sceneDirPath);
     scene.materials.reserve(data->materials_count);
+    scene.imagePaths.reserve(data->materials_count * 3);
 
     for (cgltf_size i = 0; i < data->materials_count; i++)
     {
         MaterialData md;
-        md.colorTexIndex = (uint32_t)cgltf_image_index(data, data->materials[i].pbr_metallic_roughness.base_color_texture.texture->image);
-        md.normalTexIndex = (uint32_t)cgltf_image_index(data, data->materials[i].normal_texture.texture->image);
-        md.aoRoughMetalTexIndex = (uint32_t)cgltf_image_index(data, data->materials[i].pbr_metallic_roughness.metallic_roughness_texture.texture->image);
+        md.colorTexIndex = (uint32_t)(i * 3 + 0);
+        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.colorTexIndex, textureFileExtension);
+        importImage(data->materials[i].pbr_metallic_roughness.base_color_texture.texture->image, imagePath, ImagePurpose::Color);
+        scene.imagePaths.push_back(imagePath);
+
+        md.normalTexIndex = (uint32_t)(i * 3 + 1);
+        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.normalTexIndex, textureFileExtension);
+        importImage(data->materials[i].normal_texture.texture->image, imagePath, ImagePurpose::Normal);
+        scene.imagePaths.push_back(imagePath);
+
+        md.aoRoughMetalTexIndex = (uint32_t)(i * 3 + 2);
+        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.aoRoughMetalTexIndex, textureFileExtension);
+        importImage(data->materials[i].pbr_metallic_roughness.metallic_roughness_texture.texture->image, imagePath, ImagePurpose::Shading);
+        scene.imagePaths.push_back(imagePath);
+
         scene.materials.push_back(md);
-        scene.images[md.colorTexIndex].sRGB = true;
     }
 }
 
@@ -100,34 +84,40 @@ static void optimizeScene(Scene &scene)
     scene.normalUvs = newNormalUvBuffer;
 }
 
+void importMaterial(const MaterialTextureSet &srcSet, const MaterialTextureSet &dstSet)
+{
+    importImage(srcSet.baseColorTexPath, dstSet.baseColorTexPath, ImagePurpose::Color);
+    importImage(srcSet.normalTexPath, dstSet.normalTexPath, ImagePurpose::Normal);
+    importImage(srcSet.aoRoughMetalTexPath, dstSet.aoRoughMetalTexPath, ImagePurpose::Shading);
+}
+
 void addMaterialToScene(Scene &scene, const MaterialTextureSet &set)
 {
-    uint32_t imageCount = (uint32_t)scene.images.size();
+    uint32_t imageCount = (uint32_t)scene.imagePaths.size();
     MaterialData md;
     md.colorTexIndex = imageCount;
     md.normalTexIndex = imageCount + 1;
     md.aoRoughMetalTexIndex = imageCount + 2;
     scene.materials.push_back(md);
 
-    scene.images.push_back(importImage(set.colorTexPath));
-    scene.images.push_back(importImage(set.normalTexPath));
-    scene.images.push_back(importImage(set.aoRoughMetalTexPath));
-    scene.images[imageCount].sRGB = true;
+    scene.imagePaths.push_back(set.baseColorTexPath);
+    scene.imagePaths.push_back(set.normalTexPath);
+    scene.imagePaths.push_back(set.aoRoughMetalTexPath);
 }
 
-Scene importSceneFromGlb(const char *filename, float scale)
+void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float scale)
 {
-    ASSERT(EXISTS(filename));
+    ASSERT(pathExists(glbFilePath));
+    mkdir(sceneDirPath, true);
 
     cgltf_options options {};
     cgltf_data *data = nullptr;
-    VERIFY(cgltf_parse_file(&options, filename, &data) == cgltf_result_success);
+    VERIFY(cgltf_parse_file(&options, glbFilePath, &data) == cgltf_result_success);
     ASSERT(cgltf_validate(data) == cgltf_result_success);
-    VERIFY(cgltf_load_buffers(&options, data, filename) == cgltf_result_success);
+    VERIFY(cgltf_load_buffers(&options, data, glbFilePath) == cgltf_result_success);
 
     Scene scene;
-    importImages(data, scene);
-    importMaterials(data, scene);
+    importMaterials(data, scene, sceneDirPath);
 
     const cgltf_scene &cgltfScene = data->scene ? *data->scene : data->scenes[0];
     std::stack<cgltf_node *> stack;
@@ -230,16 +220,32 @@ Scene importSceneFromGlb(const char *filename, float scale)
         }
     }
 
+    cgltf_free(data);
+
     ASSERT(scene.positions.size() == scene.normalUvs.size());
     optimizeScene(scene);
 
-    return scene;
+    writeSceneToFile(scene, sceneDirPath);
 }
 
-Scene loadSceneFromFile(const char *filename)
+static const char *getSceneFilename(const char *sceneDirPath)
 {
-    FILE *stream = fopen(filename, "rb");
+    const char *sceneDirBasename;
+    size_t sceneDirBasenameLength;
+    cwk_path_get_basename_wout_extension(sceneDirPath, &sceneDirBasename, &sceneDirBasenameLength);
+    const char *format = "%s/%.*s%s";
+    size_t sceneFilenameSize = snprintf(nullptr, 0, format, sceneDirPath, (uint32_t)sceneDirBasenameLength, sceneDirBasename, sceneFileExtension) + 1;
+    char *sceneFilename = new char[sceneFilenameSize];
+    snprintf(sceneFilename, sceneFilenameSize, format, sceneDirPath, (uint32_t)sceneDirBasenameLength, sceneDirBasename, sceneFileExtension);
+    return sceneFilename;
+}
+
+Scene loadSceneFromFile(const char *sceneDirPath)
+{
+    const char *sceneFilename = getSceneFilename(sceneDirPath);
+    FILE *stream = fopen(sceneFilename, "rb");
     ASSERT(stream);
+    delete[] sceneFilename;
 
     uint32_t indexCount;
     uint32_t vertexCount;
@@ -258,7 +264,7 @@ Scene loadSceneFromFile(const char *filename)
     scene.normalUvs.resize(vertexCount);
     scene.transforms.resize(transformCount);
     scene.materials.resize(materialCount);
-    scene.images.resize(imageCount);
+    scene.imagePaths.resize(imageCount);
 
     fread(scene.indices.data(), sizeof(decltype(scene.indices)::value_type), indexCount, stream);
     fread(scene.positions.data(), sizeof(decltype(scene.positions)::value_type), vertexCount, stream);
@@ -268,16 +274,10 @@ Scene loadSceneFromFile(const char *filename)
 
     for (uint32_t i = 0; i < imageCount; i++)
     {
-        Image &image = scene.images[i];
-        uint8_t temp;
         uint32_t size;
-        fread(&image.width, sizeof(uint32_t), 1, stream);
-        fread(&image.height, sizeof(uint32_t), 1, stream);
-        fread(&temp, sizeof(uint8_t), 1, stream);
-        image.sRGB = temp;
         fread(&size, sizeof(uint32_t), 1, stream);
-        image.data.resize(size);
-        fread(image.data.data(), 1, size, stream);
+        scene.imagePaths[i].resize(size);
+        fread((void *)scene.imagePaths[i].data(), 1, size, stream);
     }
 
     fclose(stream);
@@ -285,17 +285,20 @@ Scene loadSceneFromFile(const char *filename)
     return scene;
 }
 
-void writeSceneToFile(const Scene &scene, const char *filename)
+void writeSceneToFile(const Scene &scene, const char *sceneDirPath)
 {
-    FILE *stream = fopen(filename, "wb");
+    mkdir(sceneDirPath, true);
+    const char *sceneFilename = getSceneFilename(sceneDirPath);
+    FILE *stream = fopen(sceneFilename, "wb");
     ASSERT(stream);
+    delete[] sceneFilename;
 
     ASSERT(scene.positions.size() == scene.normalUvs.size());
     uint32_t indexCount = (uint32_t)scene.indices.size();
     uint32_t vertexCount = (uint32_t)scene.positions.size();
     uint32_t transformCount = (uint32_t)scene.transforms.size();
     uint32_t materialCount = (uint32_t)scene.materials.size();
-    uint32_t imageCount = (uint32_t)scene.images.size();
+    uint32_t imageCount = (uint32_t)scene.imagePaths.size();
 
     // TODO: write compressed vertex data?
     fwrite(&indexCount, sizeof(uint32_t), 1, stream);
@@ -309,15 +312,11 @@ void writeSceneToFile(const Scene &scene, const char *filename)
     fwrite(scene.transforms.data(), sizeof(decltype(scene.transforms)::value_type), transformCount, stream);
     fwrite(scene.materials.data(), sizeof(decltype(scene.materials)::value_type), materialCount, stream);
 
-    // TODO: write PNG instead of raw image data?
     for (uint32_t i = 0; i < imageCount; i++)
     {
-        uint32_t size = (uint32_t)scene.images[i].data.size();
-        fwrite(&scene.images[i].width, sizeof(uint32_t), 1, stream);
-        fwrite(&scene.images[i].height, sizeof(uint32_t), 1, stream);
-        fwrite(&scene.images[i].sRGB, sizeof(uint8_t), 1, stream);
+        uint32_t size = (uint32_t)scene.imagePaths[i].size();
         fwrite(&size, sizeof(uint32_t), 1, stream);
-        fwrite(scene.images[i].data.data(), 1, size, stream);
+        fwrite(scene.imagePaths[i].data(), 1, size, stream);
     }
 
     fclose(stream);

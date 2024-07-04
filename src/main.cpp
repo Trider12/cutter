@@ -1,3 +1,4 @@
+#include <cwalk.h>
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -6,16 +7,22 @@
 #include <backends/imgui_impl_vulkan.h>
 #include <meshoptimizer.h>
 #include <VkBootstrap.h>
+#define TRACY_VK_USE_SYMBOL_TABLE
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyVulkan.hpp>
 
 #include "Camera.hpp"
+#include "DebugUtils.hpp"
 #include "Graphics.hpp"
+#include "ImageUtils.hpp"
+#include "JobSystem.hpp"
 #include "Scene.hpp"
 #include "ShaderUtils.hpp"
-#include "Stb.h"
 #include "VkUtils.hpp"
 
 // skip importing if already exist
 #define SKIP_SCENE_REIMPORT 1
+#define SKIP_MATERIAL_REIMPORT 1
 #define SKIP_SKYBOX_REIMPORT 1
 
 GLFWwindow *window;
@@ -44,6 +51,7 @@ int main()
         if (delta > 1.f)
             delta = defaultDelta;
         prevTime = currTime;
+        FrameMark;
     }
 
     exit();
@@ -53,14 +61,19 @@ int main()
 
 const char *const appName = "Cutter";
 
+#define shadersPath  "src/shaders/"
+
 #define assetsPath   "assets/"
-#define shadersPath  assetsPath "shaders/"
 #define spvsPath     assetsPath "spv/"
-#define glbsPath     assetsPath "glb/"
 #define scenesPath   assetsPath "scenes/"
-#define texturesPath assetsPath "textures/"
 #define fontsPath    assetsPath "fonts/"
 #define skyboxesPath assetsPath "skyboxes/"
+#define texturesPath assetsPath "textures/"
+
+#define contentPath    "content/"
+#define glbsPath       contentPath "glb/"
+#define imagesPath     contentPath "images/"
+#define hdriImagesPath contentPath "hdri/"
 
 const struct ShaderCompileInfo
 {
@@ -80,68 +93,84 @@ const struct ShaderCompileInfo
 const struct SceneImportInfo
 {
     const char *glbAssetPath;
-    const char *scenePath;
+    const char *sceneDirPath;
     float scalingFactor;
 } sceneInfos[]
 {
-    {glbsPath"Cube.glb",              scenesPath"Cube.bin",              1.f},
-    {glbsPath"ShaderBall.glb",        scenesPath"ShaderBall.bin",        1.f},
-    {glbsPath"Lantern.glb",           scenesPath"Lantern.bin",           0.2f},
-    {glbsPath"WaterBottle.glb",       scenesPath"WaterBottle.bin",       8.f},
-    {glbsPath"SciFiHelmet.glb",       scenesPath"SciFiHelmet.bin",       1.f},
-    {glbsPath"NormalTangentTest.glb", scenesPath"NormalTangentTest.bin", 1.f}
+    {glbsPath"Cube.glb",              scenesPath"Cube",              1.f},
+    {glbsPath"ShaderBall.glb",        scenesPath"ShaderBall",        1.f},
+    {glbsPath"Lantern.glb",           scenesPath"Lantern",           0.2f},
+    {glbsPath"WaterBottle.glb",       scenesPath"WaterBottle",       8.f},
+    {glbsPath"SciFiHelmet.glb",       scenesPath"SciFiHelmet",       1.f},
+    {glbsPath"NormalTangentTest.glb", scenesPath"NormalTangentTest", 1.f}
 };
 uint8_t selectedScene = 1;
 bool sceneChangeRequired = false;
 
-const MaterialTextureSet materialSets[]
+const struct MaterialImportInfo
+{
+    MaterialTextureSet srcSet;
+    MaterialTextureSet dstSet;
+} materialInfos[]
 {
     {
-        texturesPath"used-stainless-steel2-bl/used-stainless-steel2_albedo.png",
-        texturesPath"used-stainless-steel2-bl/used-stainless-steel2_normal-ogl.png",
-        texturesPath"used-stainless-steel2-bl/used-stainless-steel2_ao-roughness-metallic.png",
+        imagesPath"used-stainless-steel2-bl/used-stainless-steel2_albedo.png",
+        imagesPath"used-stainless-steel2-bl/used-stainless-steel2_normal-ogl.png",
+        imagesPath"used-stainless-steel2-bl/used-stainless-steel2_ao-roughness-metallic.png",
+        texturesPath"used-stainless-steel/used-stainless-steel_basecolor.ktx2",
+        texturesPath"used-stainless-steel/used-stainless-steel_normal.ktx2",
+        texturesPath"used-stainless-steel/used-stainless-steel_ao-roughness-metallic.ktx2",
     },
     {
-        texturesPath"white-marble-bl/white-marble_albedo.png",
-        texturesPath"white-marble-bl/white-marble_normal-ogl.png",
-        texturesPath"white-marble-bl/white-marble_ao-roughness-metallic.png",
+        imagesPath"white-marble-bl/white-marble_albedo.png",
+        imagesPath"white-marble-bl/white-marble_normal-ogl.png",
+        imagesPath"white-marble-bl/white-marble_ao-roughness-metallic.png",
+        texturesPath"white-marble/white-marble_basecolor.ktx2",
+        texturesPath"white-marble/white-marble_normal.ktx2",
+        texturesPath"white-marble/white-marble_ao-roughness-metallic.ktx2",
     },
     {
-        texturesPath"brick-wall-bl/brick-wall_albedo.png",
-        texturesPath"brick-wall-bl/brick-wall_normal-ogl.png",
-        texturesPath"brick-wall-bl/brick-wall_ao-roughness-metallic.png",
+        imagesPath"brick-wall-bl/brick-wall_albedo.png",
+        imagesPath"brick-wall-bl/brick-wall_normal-ogl.png",
+        imagesPath"brick-wall-bl/brick-wall_ao-roughness-metallic.png",
+        texturesPath"brick-wall/brick-wall_basecolor.ktx2",
+        texturesPath"brick-wall/brick-wall_normal.ktx2",
+        texturesPath"brick-wall/brick-wall_ao-roughness-metallic.ktx2",
     },
     {
-        texturesPath"rustediron1-alt2-bl/rustediron2_basecolor.png",
-        texturesPath"rustediron1-alt2-bl/rustediron2_normal.png",
-        texturesPath"rustediron1-alt2-bl/rustediron2_ao-roughness-metallic.png",
+        imagesPath"rustediron1-alt2-bl/rustediron2_basecolor.png",
+        imagesPath"rustediron1-alt2-bl/rustediron2_normal.png",
+        imagesPath"rustediron1-alt2-bl/rustediron2_ao-roughness-metallic.png",
+        texturesPath"rustediron/rustediron_basecolor.ktx2",
+        texturesPath"rustediron/rustediron_normal.ktx2",
+        texturesPath"rustediron/rustediron_ao-roughness-metallic.ktx2",
     },
     {
-        texturesPath"copper-rock1-bl/copper-rock1-alb.png",
-        texturesPath"copper-rock1-bl/copper-rock1-normal.png",
-        texturesPath"copper-rock1-bl/copper-rock1-ao-roughness-metallic.png",
+        imagesPath"copper-rock1-bl/copper-rock1-alb.png",
+        imagesPath"copper-rock1-bl/copper-rock1-normal.png",
+        imagesPath"copper-rock1-bl/copper-rock1-ao-roughness-metallic.png",
+        texturesPath"copper-rock/copper-rock_basecolor.ktx2",
+        texturesPath"copper-rock/copper-rock_normal.ktx2",
+        texturesPath"copper-rock/copper-rock_ao-roughness-metallic.ktx2",
     }
 };
-const char *const materialNames[] { "Scene Default", "Stainless Steel", "White Marble", "Brick Wall", "Rusted Iron", "Copper Rock" };
-static_assert(COUNTOF(materialSets) + 1 == COUNTOF(materialNames), "");
+const char *const materialNames[]
+{
+    "Scene Default",
+    "Stainless Steel",
+    "White Marble",
+    "Brick Wall",
+    "Rusted Iron",
+    "Copper Rock"
+};
+static_assert(COUNTOF(materialInfos) + 1 == COUNTOF(materialNames), "");
 uint32_t selectedMaterial = 0;
 
 const char *const hdriPaths[]
 {
-    texturesPath"hdri/fish_hoek_beach_4k.hdr",
-    texturesPath"hdri/lilienstein_4k.hdr",
-    texturesPath"hdri/HDR_040_Field_Ref.hdr"
-};
-
-const uint32_t skyboxSize = 1024;
-const char *const skyboxImageSuffixes[6]
-{
-    "right",
-    "left",
-    "top",
-    "bottom",
-    "front",
-    "back"
+    hdriImagesPath"fish_hoek_beach_4k.hdr",
+    hdriImagesPath"lilienstein_4k.hdr",
+    hdriImagesPath"HDR_040_Field_Ref.hdr"
 };
 
 const char *const defaultFontPath = fontsPath"Roboto-Medium.ttf";
@@ -209,6 +238,8 @@ uint32_t selectedSkybox = 0;
 
 VkSampler linearRepeatSampler;
 
+TracyVkCtx tracyContext;
+
 struct FrameData
 {
     VkSemaphore imageAcquiredSemaphore, renderFinishedSemaphore;
@@ -240,11 +271,8 @@ bool cursorCaptured = false;
 
 void prepareAssets()
 {
-    ASSERT(EXISTS(assetsPath) && "Assets must reside in the working dir!");
-
-#ifdef DEBUG
-    MKDIR(spvsPath);
-    MKDIR(scenesPath);
+    ZoneScoped;
+    ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
     initShaderCompiler();
     for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
@@ -256,24 +284,23 @@ void prepareAssets()
     for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
     {
 #if SKIP_SCENE_REIMPORT
-        if (!EXISTS(sceneInfos[i].scenePath))
+        if (!pathExists(sceneInfos[i].sceneDirPath))
 #endif
-        {
-            Scene scene = importSceneFromGlb(sceneInfos[i].glbAssetPath, sceneInfos[i].scalingFactor);
-
-            for (uint8_t j = 0; j < COUNTOF(materialSets); j++)
-            {
-                addMaterialToScene(scene, materialSets[j]);
-            }
-
-            writeSceneToFile(scene, sceneInfos[i].scenePath);
-        }
+            importSceneFromGlb(sceneInfos[i].glbAssetPath, sceneInfos[i].sceneDirPath, sceneInfos[i].scalingFactor);
     }
-#endif // DEBUG
+
+    for (uint8_t i = 0; i < COUNTOF(materialInfos); i++)
+    {
+#if SKIP_MATERIAL_REIMPORT
+        if (!pathExists(materialInfos[i].dstSet.baseColorTexPath))
+#endif
+            importMaterial(materialInfos[i].srcSet, materialInfos[i].dstSet);
+    }
 }
 
 void initVulkan()
 {
+    ZoneScoped;
     vkVerify(volkInitialize());
 
     vkb::InstanceBuilder builder;
@@ -295,6 +322,7 @@ void initVulkan()
 
     VkPhysicalDeviceFeatures features {};
     features.shaderSampledImageArrayDynamicIndexing = true;
+    features.textureCompressionBC = true;
     VkPhysicalDeviceVulkan11Features features11 {};
     features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     features11.storageBuffer16BitAccess = true;
@@ -304,12 +332,14 @@ void initVulkan()
     features12.storageBuffer8BitAccess = true;
     features12.uniformAndStorageBuffer8BitAccess = true;
     features12.uniformBufferStandardLayout = true;
+    features12.hostQueryReset = true;
 
     vkb::PhysicalDeviceSelector selector { vkbInstance, surface };
     vkb::PhysicalDevice vkbPhysicalDevice = selector
         .set_minimum_version(1, 2)
         .add_required_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)
         .add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
+        .add_required_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)
         .set_required_features(features)
         .set_required_features_11(features11)
         .set_required_features_12(features12)
@@ -352,10 +382,13 @@ void initVulkan()
     allocatorCreateInfo.instance = instance;
     allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
     vkVerify(vmaCreateAllocator(&allocatorCreateInfo, &allocator));
+
+    tracyContext = TracyVkContextHostCalibrated(instance, physicalDevice, device, vkGetInstanceProcAddr, vkGetDeviceProcAddr);
 }
 
 void terminateVulkan()
 {
+    TracyVkDestroy(tracyContext);
     vmaDestroyAllocator(allocator);
     vkDestroyDevice(device, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -368,6 +401,7 @@ void terminateVulkan()
 
 void createSwapchain(uint32_t width, uint32_t height)
 {
+    ZoneScoped;
     vkb::SwapchainBuilder swapchainBuilder { physicalDevice, device, surface };
 
     VkSurfaceFormatKHR surfaceFormat;
@@ -401,6 +435,7 @@ void destroySwapchain()
 
 void initRenderTargets()
 {
+    ZoneScoped;
     createSwapchain(windowExtent.width, windowExtent.height);
     depthImage = createImage2D(allocator,
         VK_FORMAT_D32_SFLOAT,
@@ -417,6 +452,7 @@ void terminateRenderTargets()
 
 void recreateRenderTargets()
 {
+    ZoneScoped;
     int width = 0, height = 0;
     glfwGetFramebufferSize(window, &width, &height);
 
@@ -434,6 +470,7 @@ void recreateRenderTargets()
 
 void initAuxiliary()
 {
+    ZoneScoped;
     VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex);
     VkCommandBufferAllocateInfo commandBufferAllocateInfo;
     VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
@@ -482,6 +519,7 @@ void terminateAuxiliary()
 
 void initDescriptors()
 {
+    ZoneScoped;
     VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearRepeatSampler));
 
@@ -547,6 +585,7 @@ void terminateDescriptors()
 
 void initPipelines()
 {
+    ZoneScoped;
     // Model
     VkPushConstantRange range {};
     range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -642,6 +681,7 @@ static PFN_vkVoidFunction imguiVulkanLoader(const char *funcName, void *userData
 
 void initImgui()
 {
+    ZoneScoped;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
@@ -709,6 +749,7 @@ void endAndSubmitOneTimeCmd(VkCommandBuffer cmd, VkQueue queue, const VkSemaphor
 
 void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, bool dstQueueFamilyIsGraphics)
 {
+    ZoneScoped;
     VkSemaphore semaphore;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
@@ -763,6 +804,7 @@ void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint3
 
 void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, bool dstQueueFamilyIsGraphics)
 {
+    ZoneScoped;
     VkSemaphore semaphore;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
@@ -830,6 +872,7 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
 
 void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, VkImageLayout oldLayout, bool srcQueueFamilyIsGraphics)
 {
+    ZoneScoped;
     VkSemaphore semaphore;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
@@ -886,8 +929,9 @@ void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uin
     vkDestroySemaphore(device, semaphore, nullptr);
 }
 
-void loadModel(const char *scenePath)
+void loadModel(const char *sceneDirPath)
 {
+    ZoneScoped;
     static const uint32_t maxIndexCount = UINT16_MAX * 4;
     static const uint32_t maxVertexCount = UINT16_MAX;
     static const uint32_t maxTransformCount = UINT8_MAX;
@@ -904,7 +948,12 @@ void loadModel(const char *scenePath)
     static const uint32_t maxTransformsOffset = maxNormalUvsOffset + maxNormalUvsSize;
     static const uint32_t maxMaterialsOffset = maxTransformsOffset + maxTransformsSize;
 
-    model = loadSceneFromFile(scenePath);
+    model = loadSceneFromFile(sceneDirPath);
+
+    for (uint8_t j = 0; j < COUNTOF(materialInfos); j++)
+    {
+        addMaterialToScene(model, materialInfos[j].dstSet);
+    }
 
     uint32_t indicesSize = (uint32_t)model.indices.size() * sizeof(decltype(model.indices)::value_type);
     uint32_t positionsSize = (uint32_t)model.positions.size() * sizeof(decltype(model.positions)::value_type);
@@ -956,27 +1005,30 @@ void loadModel(const char *scenePath)
         destroyImage(allocator, modelTextures[i]);
     }
 
-    ASSERT(model.images.size() < UINT8_MAX);
-    modelTextureCount = (uint8_t)model.images.size();
+    ASSERT(model.imagePaths.size() < UINT8_MAX);
+    modelTextureCount = (uint8_t)model.imagePaths.size();
     VkDescriptorImageInfo imageInfos[MAX_TEXTURES] {};
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
+        ZoneScopedN("Load Texture");
+        ZoneText(model.imagePaths[i].data(), model.imagePaths[i].length());
+        Image image = loadImage(model.imagePaths[i].data());
         modelTextures[i] = createImage2D(allocator,
-            model.images[i].sRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
-            { model.images[i].width, model.images[i].height },
+            image.format,
+            { image.width, image.height },
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
         imageInfos[i].imageView = modelTextures[i].imageView;
         imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        memcpy(stagingBuffer.mappedData, model.images[i].data.data(), model.images[i].data.size());
+        memcpy(stagingBuffer.mappedData, image.data, image.faceSize);
+        freeImage(image);
 
         VkBufferImageCopy copyRegion {};
         copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageExtent = { model.images[i].width, model.images[i].height, 1 };
-
+        copyRegion.imageExtent = modelTextures[i].imageExtent;
         copyStagingBufferToImage(modelTextures[i].image, &copyRegion, 1, true);
     }
 
@@ -995,6 +1047,8 @@ void loadModel(const char *scenePath)
 
 void generateSkybox(const char *hdriPath)
 {
+    static constexpr uint32_t skyboxSize = 2048;
+    ZoneScoped;
     VkDescriptorSetLayoutBinding setBindings[]
     {
         {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
@@ -1035,60 +1089,56 @@ void generateSkybox(const char *hdriPath)
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
 
-    GpuImage skyboxImage = createImage2DArray(allocator,
-        VK_FORMAT_R32G32B32A32_SFLOAT,
-        { skyboxSize, skyboxSize },
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        false);
-    VkDescriptorImageInfo imageInfo { nullptr, skyboxImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
-    VkWriteDescriptorSet write = initWriteDescriptorSetImage(set, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-
-    uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * STBI_rgb_alpha * sizeof(float);
-
-    beginOneTimeCmd(computeCmd, computeCommandPool);
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = skyboxImage.image;
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-    imageBarrier.srcAccessMask = AccessFlags::Read;
-    imageBarrier.dstAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
-    endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, true);
-
-    ASSERT(stbi_is_hdr(hdriPath));
-    int x, y;
-    float *hdriImageData = stbi_loadf(hdriPath, &x, &y, nullptr, STBI_rgb_alpha);
-    uint32_t hdriImageSize = x * y * STBI_rgb_alpha * sizeof(float);
-    memcpy((char *)stagingBuffer.mappedData, hdriImageData, hdriImageSize);
-    stbi_image_free(hdriImageData);
-
-    GpuImage hdriImage = createImage2D(allocator,
-        VK_FORMAT_R32G32B32A32_SFLOAT,
-        { (uint32_t)x, (uint32_t)y },
+    Image image = importImage(hdriPath, ImagePurpose::HDRI);
+    memcpy((char *)stagingBuffer.mappedData, image.data, image.faceSize);
+    GpuImage hdriGpuImage = createImage2D(allocator,
+        image.format,
+        { image.width, image.height },
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         VK_IMAGE_ASPECT_COLOR_BIT);
+    freeImage(image);
 
     VkBufferImageCopy copyRegion {};
     copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageExtent = { (uint32_t)x, (uint32_t)y, 1 };
+    copyRegion.imageExtent = hdriGpuImage.imageExtent;
+    copyStagingBufferToImage(hdriGpuImage.image, &copyRegion, 1, false);
 
-    copyStagingBufferToImage(hdriImage.image, &copyRegion, 1, false);
+    GpuImage skyboxGpuImage = createImage2DArray(allocator,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
+        { skyboxSize, skyboxSize },
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        false);
 
-    imageInfo = { nullptr, hdriImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-    write = initWriteDescriptorSetImage(set, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &imageInfo);
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    VkDescriptorImageInfo imageInfos[2]
+    {
+        { nullptr, hdriGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL }
+    };
+    VkWriteDescriptorSet writes[2]
+    {
+        initWriteDescriptorSetImage(set, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
+        initWriteDescriptorSetImage(set, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
+    };
+    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 
     beginOneTimeCmd(computeCmd, computeCommandPool);
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = skyboxGpuImage.image;
+    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE_KHR;
+    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
+    imageBarrier.srcAccessMask = AccessFlags::None;
+    imageBarrier.dstAccessMask = AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
     vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
     vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &set, 0, nullptr);
     vkCmdDispatch(computeCmd, workGroupCount, workGroupCount, 1);
     endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, true);
 
+    uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * 4 * sizeof(uint16_t);
     VkBufferImageCopy copyRegions[6] {};
     for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
     {
@@ -1099,37 +1149,39 @@ void generateSkybox(const char *hdriPath)
         copyRegions[j].imageSubresource.layerCount = 1;
         copyRegions[j].imageExtent = { skyboxSize, skyboxSize, 1 };
     }
+    copyImageToStagingBuffer(skyboxGpuImage.image, copyRegions, COUNTOF(copyRegions), VK_IMAGE_LAYOUT_GENERAL, false);
 
-    copyImageToStagingBuffer(skyboxImage.image, copyRegions, COUNTOF(copyRegions), VK_IMAGE_LAYOUT_GENERAL, false);
-    char *skyboxImageData = new char[6 * skyboxImageLayerSize];
-    memcpy(skyboxImageData, stagingBuffer.mappedData, 6 * skyboxImageLayerSize);
+    image = {};
+    image.faceSize = skyboxImageLayerSize;
+    image.faceCount = 6;
+    image.levelCount = 1;
+    image.width = skyboxSize;
+    image.height = skyboxSize;
+    image.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    image.purpose = ImagePurpose::HDRI;
+    image.data = new unsigned char[image.faceCount * image.faceSize];
+    memcpy(image.data, stagingBuffer.mappedData, image.faceCount * image.faceSize);
 
-    MKDIR(skyboxesPath);
-    char skyboxImageDir[256];
-    BufferView<char> hdriFilename = getFilename(hdriPath, false);
-    uint32_t skyboxImageDirLength = snprintf(skyboxImageDir, sizeof(skyboxImageDir), "%s/%.*s", skyboxesPath, hdriFilename.length, hdriFilename.data);
-    ASSERT(skyboxImageDirLength <= 256);
-    MKDIR(skyboxImageDir);
+    char skyboxImagePath[256];
+    const char *hdriFilename;
+    size_t hdriFilenameLength;
+    cwk_path_get_basename_wout_extension(hdriPath, &hdriFilename, &hdriFilenameLength);
+    snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s.ktx2", skyboxesPath, (uint32_t)hdriFilenameLength, hdriFilename);
 
-    for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
-    {
-        snprintf(skyboxImageDir + skyboxImageDirLength, sizeof(skyboxImageDir) - skyboxImageDirLength, "/%.*s_%s.hdr", hdriFilename.length, hdriFilename.data, skyboxImageSuffixes[j]);
-        stbi_write_hdr(skyboxImageDir, skyboxSize, skyboxSize, STBI_rgb_alpha, (float *)(skyboxImageData + j * skyboxImageLayerSize));
-    }
-
-    delete[] skyboxImageData;
-
-    destroyImage(allocator, hdriImage);
+    writeImage(image, skyboxImagePath);
+    delete[] image.data;
 
     vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
     vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
     vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
     vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
-    destroyImage(allocator, skyboxImage);
+    destroyImage(allocator, hdriGpuImage);
+    destroyImage(allocator, skyboxGpuImage);
 }
 
 void loadSkybox(const char *scenePath)
 {
+    ZoneScoped;
     skybox = loadSceneFromFile(scenePath);
 
     uint32_t indexCount = (uint32_t)skybox.indices.size();
@@ -1162,55 +1214,43 @@ void loadSkybox(const char *scenePath)
     {
         {skyboxBuffer.buffer, positionsOffset, positionsSize},
     };
-
     VkDescriptorImageInfo imageInfos[COUNTOF(hdriPaths)];
 
     for (uint8_t i = 0; i < COUNTOF(hdriPaths); i++)
     {
-        char skyboxImageDir[256];
-        BufferView<char> hdriFilename = getFilename(hdriPaths[i], false);
-        uint32_t skyboxImageDirLength = snprintf(skyboxImageDir, sizeof(skyboxImageDir), "%s/%.*s", skyboxesPath, hdriFilename.length, hdriFilename.data);
+        char skyboxImagePath[256];
+        const char *hdriFilename;
+        size_t hdriFilenameLength;
+        cwk_path_get_basename_wout_extension(hdriPaths[i], &hdriFilename, &hdriFilenameLength);
+        snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s.ktx2", skyboxesPath, (uint32_t)hdriFilenameLength, hdriFilename);
 
+#if SKIP_SKYBOX_REIMPORT
+        if (!pathExists(skyboxImagePath))
+#endif
+            generateSkybox(hdriPaths[i]);
+
+        Image image = loadImage(skyboxImagePath);
         skyboxImages[i] = createImage2DArray(allocator,
-            VK_FORMAT_R32G32B32A32_SFLOAT,
-            { skyboxSize, skyboxSize },
+            image.format,
+            { image.width, image.height },
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT,
             true);
 
         VkBufferImageCopy copyRegions[6] {};
-        uint32_t bufferOffset = 0;
-
-#ifdef DEBUG
-#if SKIP_SKYBOX_REIMPORT
-        if (!EXISTS(skyboxImageDir))
-#endif
-            generateSkybox(hdriPaths[i]);
-#endif
-
         for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
         {
-            snprintf(skyboxImageDir + skyboxImageDirLength, sizeof(skyboxImageDir) - skyboxImageDirLength, "/%.*s_%s.hdr", hdriFilename.length, hdriFilename.data, skyboxImageSuffixes[j]);
-
-            int x, y;
-            float *imageData = stbi_loadf(skyboxImageDir, &x, &y, nullptr, STBI_rgb_alpha);
-            ASSERT(x == skyboxSize && y == skyboxSize);
-            uint32_t imageSize = x * y * STBI_rgb_alpha * sizeof(float);
-            memcpy((char *)stagingBuffer.mappedData + bufferOffset, imageData, imageSize);
-            stbi_image_free(imageData);
-
-            copyRegions[j].bufferOffset = bufferOffset;
+            copyRegions[j].bufferOffset = j * image.faceSize;
             copyRegions[j].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             copyRegions[j].imageSubresource.mipLevel = 0;
             copyRegions[j].imageSubresource.baseArrayLayer = j;
             copyRegions[j].imageSubresource.layerCount = 1;
-            copyRegions[j].imageExtent = { (uint32_t)x, (uint32_t)y , 1 };
-
-            bufferOffset += imageSize;
+            copyRegions[j].imageExtent = skyboxImages[i].imageExtent;
         }
 
+        memcpy(stagingBuffer.mappedData, image.data, image.faceCount * image.faceSize);
         copyStagingBufferToImage(skyboxImages[i].image, copyRegions, COUNTOF(copyRegions), true);
-
+        freeImage(image);
         imageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     }
 
@@ -1225,6 +1265,7 @@ void loadSkybox(const char *scenePath)
 
 void loadLights()
 {
+    ZoneScoped;
     lightDirsAndIntensitiesUI[0] = glm::vec4(1.f, -1.f, -1.f, 0.5f);
     lightDirsAndIntensitiesUI[1] = glm::vec4(-1.f, -1.f, -1.f, 0.5f);
     lightDirsAndIntensitiesUI[2] = glm::vec4(0, -1.f, 1.f, 0.8f);
@@ -1274,14 +1315,15 @@ void loadLights()
 
 void initScene()
 {
+    ZoneScoped;
     stagingBuffer = createBuffer(allocator,
         256 * 1024 * 1024,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
-    loadModel(sceneInfos[selectedScene].scenePath);
-    loadSkybox(sceneInfos[0].scenePath);
+    loadModel(sceneInfos[selectedScene].sceneDirPath);
+    loadSkybox(sceneInfos[0].sceneDirPath);
     loadLights();
 
     camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
@@ -1353,6 +1395,9 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
 
 void init()
 {
+    ZoneScoped;
+
+    initJobSystem();
     prepareAssets();
 
     VERIFY(glfwInit());
@@ -1371,6 +1416,7 @@ void init()
     initPipelines();
     initAuxiliary();
     initImgui();
+    initRenderdoc();
 
     initScene();
 }
@@ -1390,10 +1436,13 @@ void exit()
 
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    terminateJobSystem();
 }
 
 void updateInput()
 {
+    ZoneScoped;
     double x, y;
     glfwGetCursorPos(window, &x, &y);
     glm::vec2 cursorPos = glm::vec2((float)x, (float)y);
@@ -1419,6 +1468,7 @@ void updateInput()
 
 void updateLogic(float delta)
 {
+    ZoneScoped;
     camera.update(delta);
 
     sceneRotationTime += delta * rotateScene;
@@ -1442,6 +1492,8 @@ void update(float delta)
 
 void drawGeometry(VkCommandBuffer cmd)
 {
+    ZoneScoped;
+    TracyVkZone(tracyContext, cmd, "Geometry");
     FrameData &frame = frames[frameIndex];
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
@@ -1477,6 +1529,8 @@ void drawGeometry(VkCommandBuffer cmd)
 
 void drawSkybox(VkCommandBuffer cmd)
 {
+    ZoneScoped;
+    TracyVkZone(tracyContext, cmd, "Skybox");
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
 
@@ -1491,6 +1545,8 @@ void drawSkybox(VkCommandBuffer cmd)
 
 void drawUI(VkCommandBuffer cmd)
 {
+    ZoneScoped;
+    TracyVkZone(tracyContext, cmd, "ImGui");
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -1500,16 +1556,19 @@ void drawUI(VkCommandBuffer cmd)
 
     if (ImGui::BeginTable("##table", 2, ImGuiTableFlags_NoHostExtendX))
     {
+        const char *basename;
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Model");
         ImGui::TableNextColumn();
-        if (ImGui::BeginCombo("##model", getFilename(sceneInfos[selectedScene].scenePath, true).data, ImGuiComboFlags_WidthFitPreview))
+        cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
+        if (ImGui::BeginCombo("##model", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
             {
                 bool selected = i == selectedScene;
-                if (ImGui::Selectable(getFilename(sceneInfos[i].scenePath, true).data, selected) && !selected)
+                cwk_path_get_basename(sceneInfos[i].sceneDirPath, &basename, nullptr);
+                if (ImGui::Selectable(basename, selected) && !selected)
                 {
                     selectedScene = i;
                     sceneChangeRequired = true;
@@ -1539,12 +1598,14 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Skybox");
         ImGui::TableNextColumn();
-        if (ImGui::BeginCombo("##skybox", getFilename(hdriPaths[selectedSkybox], true).data, ImGuiComboFlags_WidthFitPreview))
+        cwk_path_get_basename(hdriPaths[selectedSkybox], &basename, nullptr);
+        if (ImGui::BeginCombo("##skybox", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < COUNTOF(hdriPaths); i++)
             {
                 bool selected = i == selectedSkybox;
-                if (ImGui::Selectable(getFilename(hdriPaths[i], true).data, selected) && !selected)
+                cwk_path_get_basename(hdriPaths[i], &basename, nullptr);
+                if (ImGui::Selectable(basename, selected) && !selected)
                 {
                     selectedSkybox = i;
                 }
@@ -1620,14 +1681,23 @@ void drawUI(VkCommandBuffer cmd)
 
 void draw()
 {
+    ZoneScoped;
     if (resizeNeeded)
         recreateRenderTargets();
 
     FrameData &frame = frames[frameIndex];
-    vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
+    {
+        ZoneScopedN("Wait for fences");
+        vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
+    }
 
     uint32_t swapchainImageIndex;
-    VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
+    VkResult result;
+
+    {
+        ZoneScopedN("Acquire image");
+        result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
     {
@@ -1649,36 +1719,39 @@ void draw()
     VkCommandBuffer cmd = frame.commandBuffer;
     VkCommandBufferBeginInfo commandBufferBeginInfo = initCommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     vkVerify(vkBeginCommandBuffer(cmd, &commandBufferBeginInfo));
+    {
+        TracyVkZone(tracyContext, cmd, "Draw");
 
-    VkClearValue colorClearValue {}, depthClearValue {};
-    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
-    VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
-    VkRenderingInfoKHR renderingInfo = initRenderingInfo(swapchainImageExtent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
+        VkClearValue colorClearValue {}, depthClearValue {};
+        VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
+        VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
+        VkRenderingInfoKHR renderingInfo = initRenderingInfo(swapchainImageExtent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
 
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = swapchainImages[swapchainImageIndex];
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // wait for acquire semaphore
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
-    imageBarrier.srcAccessMask = AccessFlags::None;
-    imageBarrier.dstAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+        ImageBarrier imageBarrier {};
+        imageBarrier.image = swapchainImages[swapchainImageIndex];
+        imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // wait for acquire semaphore
+        imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
+        imageBarrier.srcAccessMask = AccessFlags::None;
+        imageBarrier.dstAccessMask = AccessFlags::Write;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 
-    vkCmdBeginRenderingKHR(cmd, &renderingInfo);
-    drawGeometry(cmd);
-    drawSkybox(cmd);
-    drawUI(cmd);
-    vkCmdEndRenderingKHR(cmd);
+        vkCmdBeginRenderingKHR(cmd, &renderingInfo);
+        drawGeometry(cmd);
+        drawSkybox(cmd);
+        drawUI(cmd);
+        vkCmdEndRenderingKHR(cmd);
 
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // make render semaphore wait
-    imageBarrier.srcAccessMask = AccessFlags::Write;
-    imageBarrier.dstAccessMask = AccessFlags::None;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
-
+        imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
+        imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // make render semaphore wait
+        imageBarrier.srcAccessMask = AccessFlags::Write;
+        imageBarrier.dstAccessMask = AccessFlags::None;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+    }
+    TracyVkCollect(tracyContext, cmd);
     vkVerify(vkEndCommandBuffer(cmd));
 
     VkCommandBufferSubmitInfoKHR cmdSubmitInfo = initCommandBufferSubmitInfo(cmd);
@@ -1702,7 +1775,7 @@ void draw()
     if (sceneChangeRequired)
     {
         vkDeviceWaitIdle(device);
-        loadModel(sceneInfos[selectedScene].scenePath);
+        loadModel(sceneInfos[selectedScene].sceneDirPath);
         sceneChangeRequired = false;
     }
 

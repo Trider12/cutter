@@ -1,21 +1,16 @@
 #pragma once
 
-#include "../assets/shaders/common.h"
+#include "../src/shaders/common.h"
 #include "Glm.hpp"
 #include "Graphics.hpp"
+#include "ImageUtils.hpp"
 
+#include <string>
 #include <vector>
-
-struct Image
-{
-    std::vector<char> data; // unpacked
-    uint32_t width = 0, height = 0;
-    bool sRGB = false;
-};
 
 struct MaterialTextureSet
 {
-    const char *colorTexPath;
+    const char *baseColorTexPath;
     const char *normalTexPath;
     const char *aoRoughMetalTexPath;
 };
@@ -27,13 +22,15 @@ struct Scene
     std::vector<NormalUv> normalUvs;
     std::vector<TransformData> transforms;
     std::vector<MaterialData> materials;
-    std::vector<Image> images;
+    std::vector<std::string> imagePaths;
 };
+
+void importMaterial(const MaterialTextureSet &srcSet, const MaterialTextureSet &dstSet);
 
 void addMaterialToScene(Scene &scene, const MaterialTextureSet &set);
 
-Scene importSceneFromGlb(const char *filename, float scale);
+void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float scale);
 
-Scene loadSceneFromFile(const char *filename);
+Scene loadSceneFromFile(const char *sceneDirPath);
 
-void writeSceneToFile(const Scene &scene, const char *filename);
+void writeSceneToFile(const Scene &scene, const char *sceneDirPath);

@@ -1,6 +1,9 @@
 #include "ShaderUtils.hpp"
 #include "VkUtils.hpp"
 
+#include <stdio.h>
+#include <string.h>
+
 #include <shaderc/shaderc.h>
 
 static shaderc_compiler_t compiler;
@@ -17,12 +20,13 @@ static shaderc_include_result *shadercIncludeResolve(void *userData,
     UNUSED(includeDepth);
 
     // caching might be a good idea
-    int stringSize = snprintf(nullptr, 0, "%s/../%s", requestingSource, requestedSource) + 1;
+    const char *format = "%s/../%s";
+    int stringSize = snprintf(nullptr, 0, format, requestingSource, requestedSource) + 1;
     char *filepath = new char[stringSize];
-    snprintf(filepath, stringSize, "%s/../%s", requestingSource, requestedSource);
+    snprintf(filepath, stringSize, format, requestingSource, requestedSource);
     uint32_t fileSize = readFile(filepath, nullptr, 0);
     char *fileData = new char[fileSize];
-    readFile(filepath, fileData, fileSize);
+    readFile(filepath, (uint8_t *)fileData, fileSize);
 
     shaderc_include_result *result = new shaderc_include_result();
     result->source_name = filepath;
@@ -65,7 +69,7 @@ void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, S
 {
     uint32_t fileSize = readFile(shaderFilename, nullptr, 0);
     char *fileData = new char[fileSize];
-    readFile(shaderFilename, fileData, fileSize);
+    readFile(shaderFilename, (uint8_t *)fileData, fileSize);
     shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, fileData, fileSize, (shaderc_shader_kind)type, shaderFilename, "main", options);
     shaderc_compilation_status status = shaderc_result_get_compilation_status(result);
 
@@ -83,7 +87,7 @@ void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, S
 VkShaderModule createShaderModuleFromSpv(VkDevice device, const char *spvFilename)
 {
     uint32_t fileSize = readFile(spvFilename, nullptr, 0);
-    char *fileData = new char[fileSize];
+    uint8_t *fileData = new uint8_t[fileSize];
     readFile(spvFilename, fileData, fileSize);
 
     VkShaderModule shaderModule;

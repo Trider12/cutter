@@ -25,3 +25,9 @@
 [submodule "3rdparty/meshoptimizer"]
 	path = 3rdparty/meshoptimizer
 	url = https://github.com/zeux/meshoptimizer
+[submodule "3rdparty/cwalk"]
+	path = 3rdparty/cwalk
+	url = https://github.com/Trider12/cwalk
+[submodule "3rdparty/tracy"]
+	path = 3rdparty/tracy
+	url = https://github.com/wolfpld/tracy

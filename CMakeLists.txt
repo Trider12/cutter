@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
     add_compile_options(
         /W4
-        /WX
+        $<$<NOT:$<CONFIG:DEBUG>>:/WX>
         /external:I ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
         /external:W0
         /external:templates-
@@ -23,13 +23,17 @@ add_executable(cutter)
 target_sources(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Camera.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DebugUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Graphics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/JobSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ShaderUtils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Stb.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VkUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Vma.cpp
 
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/cwalk/src/cwalk.c
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/imgui_demo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/imgui_draw.cpp
@@ -39,6 +43,7 @@ target_sources(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/backends/imgui_impl_vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src/indexgenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src/quantization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tracy/public/TracyClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vk-bootstrap/src/VkBootstrap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/volk/volk.c
 )
@@ -47,13 +52,17 @@ target_include_directories(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/cgltf
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/compressonator/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/cwalk/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glfw/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glm
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/KTX-Software/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/meshoptimizer/src
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/renderdoc/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/shaderc/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/stb
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/tracy/public
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vk-bootstrap/src
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/vma/include
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/volk/include
@@ -62,6 +71,7 @@ target_include_directories(cutter PRIVATE
 
 target_compile_definitions(cutter PRIVATE
     VK_NO_PROTOTYPES
+    TRACY_ENABLE
 )
 
 if(WIN32)
@@ -77,7 +87,9 @@ if(WIN32)
     )
 
     target_link_libraries(cutter PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/compressonator/lib/CMP_Core_MD.lib
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glfw/lib-vc2022/glfw3.lib
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/KTX-Software/lib/ktx.lib
         ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/shaderc/lib/shaderc_combined.lib
     )
 
