@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <volk/volk.h>
 
-enum ImagePurpose : uint8_t
+enum class ImagePurpose : uint8_t
 {
     Undefined = 0,
     Color,
@@ -27,6 +27,10 @@ struct Image
 
 static_assert(sizeof(Image) == 24, "");
 
+void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMipsShaderPath);
+
+void terminateImageUtils();
+
 Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose);
 
 Image importImage(const char *inImageFilename, ImagePurpose purpose);
@@ -38,3 +42,5 @@ void writeImage(Image &image, const char *outImageFilename);
 Image loadImage(const char *inImageFilename);
 
 void freeImage(Image &image);
+
+void generateSkybox(const char *hdriPath, const char *skyboxPath);

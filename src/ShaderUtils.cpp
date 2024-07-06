@@ -57,6 +57,9 @@ void initShaderCompiler()
     shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
     shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_5);
     shaderc_compile_options_set_warnings_as_errors(options);
+#ifdef DEBUG
+    shaderc_compile_options_set_generate_debug_info(options);
+#endif // DEBUG
 }
 
 void terminateShaderCompiler()

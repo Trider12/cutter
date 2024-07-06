@@ -1,6 +1,11 @@
 #pragma once
 
-#include "Vma.hpp"
+#include "ImageUtils.hpp"
+
+#define VMA_VULKAN_VERSION 1002000
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <vk_mem_alloc.h>
 
 struct GpuBuffer
 {
@@ -19,29 +24,45 @@ struct GpuImage
     VkFormat imageFormat;
 };
 
-GpuBuffer createBuffer(VmaAllocator allocator, uint32_t size,
+extern VmaAllocator allocator;
+extern GpuBuffer stagingBuffer;
+
+void initGraphics();
+
+void terminateGraphics();
+
+GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
     VmaAllocationCreateFlags createFlags);
 
-GpuImage createImage2D(VmaAllocator allocator,
-    VkFormat format,
+GpuBuffer createAndUploadGpuBuffer(void *data,
+    uint32_t size,
+    VkBufferUsageFlags usageFlags,
+    VkMemoryPropertyFlags propertyFlags,
+    VmaAllocationCreateFlags createFlags);
+
+GpuImage createGpuImage2D(VkFormat format,
     VkExtent2D extent,
     VkImageUsageFlags usageFlags,
     VkImageAspectFlags aspectFlags);
 
-GpuImage createImage2DArray(VmaAllocator allocator,
-    VkFormat format,
+GpuImage createAndUploadGpuImage2D(VkFormat format,
+    VkExtent2D extent,
+    VkImageUsageFlags usageFlags,
+    VkImageAspectFlags aspectFlags);
+
+GpuImage createGpuImage2DArray(VkFormat format,
     VkExtent2D extent,
     VkImageUsageFlags usageFlags,
     VkImageAspectFlags aspectFlags,
     bool cubemap);
 
-void destroyBuffer(VmaAllocator allocator, GpuBuffer &buffer);
+void destroyGpuBuffer(GpuBuffer &buffer);
 
-void destroyImage(VmaAllocator allocator, GpuImage &image);
+void destroyGpuImage(GpuImage &image);
 
-enum AccessFlags : uint32_t
+enum class AccessFlags : uint32_t
 {
     None = 0,
     Read = 1,
@@ -53,6 +74,19 @@ inline AccessFlags operator|(AccessFlags a, AccessFlags b)
     return (AccessFlags)((uint32_t)a | (uint32_t)b);
 }
 
+inline AccessFlags operator&(AccessFlags a, AccessFlags b)
+{
+    return (AccessFlags)((uint32_t)a & (uint32_t)b);
+}
+
+enum class QueueFamily : uint8_t
+{
+    None = 0,
+    Graphics,
+    Compute,
+    Transfer
+};
+
 struct BufferBarrier
 {
     VkBuffer buffer;
@@ -60,8 +94,8 @@ struct BufferBarrier
     VkPipelineStageFlags2KHR dstStageMask;
     AccessFlags srcAccessMask;
     AccessFlags dstAccessMask;
-    uint32_t srcQueueFamilyIndex;
-    uint32_t dstQueueFamilyIndex;
+    QueueFamily srcQueueFamily;
+    QueueFamily dstQueueFamily;
 };
 
 struct ImageBarrier
@@ -73,8 +107,8 @@ struct ImageBarrier
     AccessFlags dstAccessMask;
     VkImageLayout oldLayout;
     VkImageLayout newLayout;
-    uint32_t srcQueueFamilyIndex;
-    uint32_t dstQueueFamilyIndex;
+    QueueFamily srcQueueFamily;
+    QueueFamily dstQueueFamily;
 };
 
 void pipelineBarrier(VkCommandBuffer cmd,
@@ -82,3 +116,13 @@ void pipelineBarrier(VkCommandBuffer cmd,
     uint32_t bufferBarrierCount,
     ImageBarrier *imageBarriers,
     uint32_t imageBarrierCount);
+
+void beginOneTimeCmd(VkCommandBuffer cmd, VkCommandPool commandPool);
+
+void endAndSubmitOneTimeCmd(VkCommandBuffer cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, bool wait);
+
+void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);
+
+void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);
+
+void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily srcQueueFamily);

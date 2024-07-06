@@ -1,6 +1,10 @@
+#include "Graphics.hpp"
+#include "DebugUtils.hpp"
 #include "ImageUtils.hpp"
 #include "JobSystem.hpp"
+#include "ShaderUtils.hpp"
 #include "Utils.hpp"
+#include "VkUtils.hpp"
 
 #include <cmp_core.h>
 #define KHRONOS_STATIC
@@ -13,33 +17,84 @@
 #include <stb_image.h>
 #include <tracy/Tracy.hpp>
 
+extern VkPhysicalDeviceProperties physicalDeviceProperties;
+extern VkDevice device;
+extern VkDescriptorPool descriptorPool;
+extern VmaAllocator allocator;
+
+extern VkQueue computeQueue;
+extern uint32_t computeQueueFamilyIndex;
+
+static VkCommandPool computeCommandPool;
+static VkCommandBuffer computeCmd;
+
+static VkSampler linearClampSampler;
+static const char *skyboxShaderPath;
+static const char *mipsShaderPath;
+
+static constexpr float defaultCompressionQuality = 0.1f;
+static void *optionsBC5;
+static void *optionsBC6;
+static void *optionsBC7;
+
+void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMipsShaderPath)
+{
+    skyboxShaderPath = generateSkyboxShaderPath;
+    mipsShaderPath = generateMipsShaderPath;
+
+    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(computeQueueFamilyIndex);
+    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &computeCommandPool));
+    VkCommandBufferAllocateInfo commandBufferAllocateInfo = initCommandBufferAllocateInfo(computeCommandPool, 1);
+    vkVerify(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &computeCmd));
+
+    VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
+
+    CreateOptionsBC5(&optionsBC5);
+    SetQualityBC5(optionsBC5, defaultCompressionQuality);
+    CreateOptionsBC6(&optionsBC6);
+    SetQualityBC6(optionsBC6, defaultCompressionQuality);
+    CreateOptionsBC7(&optionsBC7);
+    SetQualityBC7(optionsBC7, defaultCompressionQuality);
+}
+
+void terminateImageUtils()
+{
+    vkDestroyCommandPool(device, computeCommandPool, nullptr);
+    vkDestroySampler(device, linearClampSampler, nullptr);
+
+    DestroyOptionsBC5(optionsBC5);
+    DestroyOptionsBC5(optionsBC6);
+    DestroyOptionsBC5(optionsBC7);
+}
+
 Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
 {
     ZoneScoped;
     ASSERT(data);
     ASSERT(dataSize);
-    ASSERT(purpose);
+    ASSERT(purpose != ImagePurpose::Undefined);
     Image image {};
     int w = 0, h = 0;
 
     switch (purpose)
     {
-    case Color:
+    case ImagePurpose::Color:
         image.data = stbi_load_from_memory(data, dataSize, &w, &h, nullptr, STBI_rgb_alpha);
         image.faceSize = w * h * STBI_rgb_alpha;
         image.format = VK_FORMAT_R8G8B8A8_SRGB;
         break;
-    case Normal:
+    case ImagePurpose::Normal:
         image.data = stbi_load_from_memory(data, dataSize, &w, &h, nullptr, STBI_rgb);
         image.faceSize = w * h * STBI_rgb;
         image.format = VK_FORMAT_R8G8B8_UNORM;
         break;
-    case Shading:
+    case ImagePurpose::Shading:
         image.data = stbi_load_from_memory(data, dataSize, &w, &h, nullptr, STBI_rgb_alpha);
         image.faceSize = w * h * STBI_rgb_alpha;
         image.format = VK_FORMAT_R8G8B8A8_UNORM;
         break;
-    case HDRI:
+    case ImagePurpose::HDRI:
         ASSERT(stbi_is_hdr_from_memory((const uint8_t *)data, dataSize));
         image.data = (uint8_t *)stbi_loadf_from_memory((const uint8_t *)data, dataSize, &w, &h, nullptr, STBI_rgb_alpha);
         image.faceSize = w * h * STBI_rgb_alpha * sizeof(float);
@@ -80,10 +135,8 @@ struct CompressBlockRowOptions
     uint8_t channelCount;
     uint8_t *src;
     uint8_t *dst;
-    void *options;
 };
 
-static constexpr float defaultCompressionQuality = 0.1f;
 static constexpr uint8_t srcBlockSizeInTexels = 4;
 static constexpr uint8_t dstBlockSizeInBytes = 16;
 
@@ -98,7 +151,7 @@ static void compressBlockRowBC7(int64_t rowIndex, void *userData)
 
     for (uint32_t x = 0; x < opt.blockCountX; x++)
     {
-        CompressBlockBC7(srcBlock, stride, dstBlock, opt.options);
+        CompressBlockBC7(srcBlock, stride, dstBlock, optionsBC7);
         srcBlock += srcBlockSizeInTexels * opt.channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
@@ -128,7 +181,7 @@ static void compressBlockRowBC5CopyChannels(int64_t rowIndex, void *userData)
             }
         }
 
-        CompressBlockBC5(red, 4, green, 4, dstBlock, opt.options);
+        CompressBlockBC5(red, 4, green, 4, dstBlock, optionsBC5);
         srcBlock += srcBlockSizeInTexels * opt.channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
@@ -157,7 +210,7 @@ static void compressBlockRowBC6CopyChannels(int64_t blockRowIndex, void *userDat
             }
         }
 
-        CompressBlockBC6(rgb[0], 4 * 3, dstBlock, opt.options);
+        CompressBlockBC6(rgb[0], 4 * 3, dstBlock, optionsBC6);
         srcBlock += srcBlockSizeInTexels * opt.channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
@@ -171,116 +224,84 @@ void writeImage(Image &image, const char *outImageFilename)
     ASSERT(image.width % srcBlockSizeInTexels == 0 && image.height % srcBlockSizeInTexels == 0);
     ASSERT(image.faceCount == 1 || image.faceCount == 6);
     ASSERT(image.levelCount == 1);
-    const uint16_t blockCountX = image.width / srcBlockSizeInTexels, blockCountY = image.height / srcBlockSizeInTexels;
-    const uint32_t dstDataFaceSize = blockCountX * blockCountY * dstBlockSizeInBytes;
-    uint8_t *dstData = nullptr;
+
     VkFormat dstFormat = VK_FORMAT_UNDEFINED;
+    uint8_t channelCount = 0;
+    JobFunc jobFunc = nullptr;
 
     switch (image.purpose)
     {
-    case Color:
-    case Shading:
+    case ImagePurpose::Color:
+    case ImagePurpose::Shading:
     {
         if (image.format == VK_FORMAT_BC7_SRGB_BLOCK || image.format == VK_FORMAT_BC7_UNORM_BLOCK)
             break;
 
         ASSERT(image.format == VK_FORMAT_R8G8B8A8_SRGB || image.format == VK_FORMAT_R8G8B8A8_UNORM);
-        dstData = new uint8_t[image.faceCount * dstDataFaceSize];
-        dstFormat = image.purpose == Color ? VK_FORMAT_BC7_SRGB_BLOCK : image.purpose == Shading ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
-        ASSERT(dstFormat);
-
-        CompressBlockRowOptions opt;
-        opt.blockCountX = blockCountX;
-        opt.imageWidth = image.width;
-        opt.channelCount = 4;
-        opt.src = image.data;
-        opt.dst = dstData;
-        CreateOptionsBC7(&opt.options);
-        SetQualityBC7(opt.options, defaultCompressionQuality);
-        Token token = createToken();
-
-        for (uint8_t i = 0; i < image.faceCount; i++, opt.src += image.faceSize, opt.dst += dstDataFaceSize)
-        {
-            for (uint32_t y = 0; y < blockCountY; y++)
-            {
-                enqueueJob(compressBlockRowBC7, y, &opt, token);
-            }
-            waitForToken(token);
-        }
-
-        DestroyOptionsBC7(opt.options);
-        destroyToken(token);
+        dstFormat = image.purpose == ImagePurpose::Color ? VK_FORMAT_BC7_SRGB_BLOCK : image.purpose == ImagePurpose::Shading ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
+        channelCount = 4;
+        jobFunc = compressBlockRowBC7;
         break;
     }
-    case Normal:
+    case ImagePurpose::Normal:
     {
         if (image.format == VK_FORMAT_BC5_UNORM_BLOCK)
             break;
 
         ASSERT(image.format == VK_FORMAT_R8G8B8_UNORM || image.format == VK_FORMAT_R8G8B8A8_UNORM);
-        dstData = new uint8_t[image.faceCount * dstDataFaceSize];
         dstFormat = VK_FORMAT_BC5_UNORM_BLOCK;
-
-        CompressBlockRowOptions opt;
-        opt.blockCountX = blockCountX;
-        opt.imageWidth = image.width;
-        opt.channelCount = image.format == VK_FORMAT_R8G8B8_UNORM ? 3 : image.format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 0;
-        opt.src = image.data;
-        opt.dst = dstData;
-        ASSERT(opt.channelCount);
-        CreateOptionsBC5(&opt.options);
-        SetQualityBC5(opt.options, defaultCompressionQuality);
-        Token token = createToken();
-
-        for (uint8_t i = 0; i < image.faceCount; i++, opt.src += image.faceSize, opt.dst += dstDataFaceSize)
-        {
-            for (uint32_t y = 0; y < blockCountY; y++)
-            {
-                enqueueJob(compressBlockRowBC5CopyChannels, y, &opt, token);
-            }
-            waitForToken(token);
-        }
-
-        DestroyOptionsBC5(opt.options);
-        destroyToken(token);
+        channelCount = image.format == VK_FORMAT_R8G8B8_UNORM ? 3 : image.format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 0;
+        jobFunc = compressBlockRowBC5CopyChannels;
         break;
     }
-    case HDRI:
+    case ImagePurpose::HDRI:
     {
         if (image.format == VK_FORMAT_BC6H_UFLOAT_BLOCK)
             break;
 
         ASSERT(image.format == VK_FORMAT_R16G16B16_SFLOAT || image.format == VK_FORMAT_R16G16B16A16_SFLOAT);
-        dstData = new uint8_t[image.faceCount * dstDataFaceSize];
         dstFormat = VK_FORMAT_BC6H_UFLOAT_BLOCK;
-
-        CompressBlockRowOptions opt;
-        opt.blockCountX = blockCountX;
-        opt.imageWidth = image.width;
-        opt.channelCount = image.format == VK_FORMAT_R16G16B16_SFLOAT ? 3 : image.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 4 : 0;
-        opt.src = image.data;
-        opt.dst = dstData;
-        ASSERT(opt.channelCount);
-        CreateOptionsBC6(&opt.options);
-        SetQualityBC6(opt.options, defaultCompressionQuality);
-        Token token = createToken();
-
-        for (uint8_t i = 0; i < image.faceCount; i++, opt.src += image.faceSize, opt.dst += dstDataFaceSize)
-        {
-            for (uint32_t y = 0; y < blockCountY; y++)
-            {
-                enqueueJob(compressBlockRowBC6CopyChannels, y, &opt, token);
-            }
-            waitForToken(token);
-        }
-
-        DestroyOptionsBC6(opt.options);
-        destroyToken(token);
+        channelCount = image.format == VK_FORMAT_R16G16B16_SFLOAT ? 3 : image.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 4 : 0;
+        jobFunc = compressBlockRowBC6CopyChannels;
         break;
     }
     default:
         ASSERT(false);
         return;
+    }
+
+    uint32_t dstDataFaceSize = 0;
+    uint8_t *dstData = nullptr;
+
+    if (dstFormat)
+    {
+        ASSERT(channelCount);
+        const uint16_t blockCountX = image.width / srcBlockSizeInTexels, blockCountY = image.height / srcBlockSizeInTexels;
+        dstDataFaceSize = blockCountX * blockCountY * dstBlockSizeInBytes;
+        dstData = new uint8_t[image.faceCount * dstDataFaceSize];
+        CompressBlockRowOptions *options = (CompressBlockRowOptions *)alloca(image.faceCount * sizeof(CompressBlockRowOptions));
+        JobInfo *jobInfos = new JobInfo[blockCountY];
+        Token token = createToken();
+
+        for (uint8_t i = 0; i < image.faceCount; i++)
+        {
+            options[i].blockCountX = blockCountX;
+            options[i].imageWidth = image.width;
+            options[i].channelCount = channelCount;
+            options[i].src = image.data + i * image.faceSize;
+            options[i].dst = dstData + i * dstDataFaceSize;
+
+            for (uint32_t y = 0; y < blockCountY; y++)
+            {
+                jobInfos[y] = { jobFunc, y, &options[i] };
+            }
+
+            enqueueJobs(jobInfos, blockCountY, token);
+        }
+
+        delete[] jobInfos;
+        waitForToken(token);
+        destroyToken(token);
     }
 
     ASSERT((!dstData && !dstFormat) || (dstData && dstFormat));
@@ -370,4 +391,130 @@ void freeImage(Image &image)
 {
     free(image.data);
     image = {};
+}
+
+void generateSkybox(const char *hdriPath, const char *skyboxPath)
+{
+    static constexpr uint32_t skyboxSize = 2048;
+    ZoneScoped;
+    VkDescriptorSetLayoutBinding setBindings[]
+    {
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
+        {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
+    };
+    VkDescriptorSetLayout setLayout;
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings));
+    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &setLayout));
+    VkDescriptorSet set;
+    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &setLayout, 1);
+    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &set));
+
+    uint32_t workGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
+    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
+    uint32_t workGroupCount = (skyboxSize + workGroupSize - 1) / workGroupSize;
+
+    while (maxInvocations < workGroupSize * workGroupSize)
+    {
+        workGroupSize /= 2;
+        workGroupCount *= 2;
+    }
+
+    VkSpecializationMapEntry specEntries[]
+    {
+        {0, 0, sizeof(uint32_t)}
+    };
+    uint32_t specData[] { workGroupSize };
+    VkSpecializationInfo specInfo { COUNTOF(specEntries), specEntries,  sizeof(specData), specData };
+    VkShaderModule generateSkyboxShader = createShaderModuleFromSpv(device, skyboxShaderPath);
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, generateSkyboxShader, &specInfo);
+
+    VkPipelineLayout generateSkyboxPipelineLayout;
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&setLayout, 1);
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &generateSkyboxPipelineLayout));
+
+    VkPipeline generateSkyboxPipeline;
+    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
+
+    Image image = importImage(hdriPath, ImagePurpose::HDRI);
+    memcpy((char *)stagingBuffer.mappedData, image.data, image.faceSize);
+    GpuImage hdriGpuImage = createGpuImage2D(image.format,
+        { image.width, image.height },
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+    freeImage(image);
+
+    VkBufferImageCopy copyRegion {};
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageExtent = hdriGpuImage.imageExtent;
+    copyStagingBufferToImage(hdriGpuImage.image, &copyRegion, 1, QueueFamily::Compute);
+
+    GpuImage skyboxGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+        { skyboxSize, skyboxSize },
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        false);
+
+    VkDescriptorImageInfo imageInfos[2]
+    {
+        { nullptr, hdriGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL }
+    };
+    VkWriteDescriptorSet writes[2]
+    {
+        initWriteDescriptorSetImage(set, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
+        initWriteDescriptorSetImage(set, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
+    };
+    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+
+    beginOneTimeCmd(computeCmd, computeCommandPool);
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = skyboxGpuImage.image;
+    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE_KHR;
+    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
+    imageBarrier.srcAccessMask = AccessFlags::None;
+    imageBarrier.dstAccessMask = AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
+    vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
+    vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &set, 0, nullptr);
+    vkCmdDispatch(computeCmd, workGroupCount, workGroupCount, 1);
+    endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, true);
+
+    uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * 4 * sizeof(uint16_t);
+    VkBufferImageCopy copyRegions[6] {};
+    for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
+    {
+        copyRegions[j].bufferOffset = j * skyboxImageLayerSize;
+        copyRegions[j].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegions[j].imageSubresource.mipLevel = 0;
+        copyRegions[j].imageSubresource.baseArrayLayer = j;
+        copyRegions[j].imageSubresource.layerCount = 1;
+        copyRegions[j].imageExtent = { skyboxSize, skyboxSize, 1 };
+    }
+    copyImageToStagingBuffer(skyboxGpuImage.image, copyRegions, COUNTOF(copyRegions), QueueFamily::Compute);
+
+    image = {};
+    image.faceSize = skyboxImageLayerSize;
+    image.faceCount = 6;
+    image.levelCount = 1;
+    image.width = skyboxSize;
+    image.height = skyboxSize;
+    image.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    image.purpose = ImagePurpose::HDRI;
+    image.data = new unsigned char[image.faceCount * image.faceSize];
+    memcpy(image.data, stagingBuffer.mappedData, image.faceCount * image.faceSize);
+
+    writeImage(image, skyboxPath);
+    delete[] image.data;
+
+    vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+    vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
+    vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
+    vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
+    destroyGpuImage(hdriGpuImage);
+    destroyGpuImage(skyboxGpuImage);
 }

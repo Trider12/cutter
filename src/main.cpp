@@ -166,7 +166,7 @@ const char *const materialNames[]
 static_assert(COUNTOF(materialInfos) + 1 == COUNTOF(materialNames), "");
 uint32_t selectedMaterial = 0;
 
-const char *const hdriPaths[]
+const char *const hdriImagePaths[]
 {
     hdriImagesPath"fish_hoek_beach_4k.hdr",
     hdriImagesPath"lilienstein_4k.hdr",
@@ -185,7 +185,7 @@ VkPhysicalDevice physicalDevice;
 VkPhysicalDeviceProperties physicalDeviceProperties;
 VkDevice device;
 VkSurfaceKHR surface;
-VmaAllocator allocator;
+TracyVkCtx tracyContext;
 
 VkQueue graphicsQueue;
 uint32_t graphicsQueueFamilyIndex;
@@ -212,13 +212,6 @@ VkDescriptorSet skyboxDescriptorSet;
 VkDescriptorSetLayout computeDescriptorSetLayout;
 VkDescriptorSet computeDescriptorSet;
 
-VkCommandPool graphicsCommandPool;
-VkCommandBuffer graphicsCmd;
-VkCommandPool computeCommandPool;
-VkCommandBuffer computeCmd;
-VkCommandPool transferCommandPool;
-VkCommandBuffer transferCmd;
-
 VkPipeline modelPipeline;
 VkPipelineLayout modelPipelineLayout;
 VkPipeline skyboxPipeline;
@@ -226,19 +219,16 @@ VkPipelineLayout skyboxPipelineLayout;
 VkPipeline computePipeline;
 VkPipelineLayout computePipelineLayout;
 
-GpuBuffer stagingBuffer;
 GpuBuffer modelBuffer;
 GpuBuffer skyboxBuffer;
 GpuBuffer globalUniformBuffer;
 
 GpuImage modelTextures[MAX_TEXTURES];
 uint8_t modelTextureCount;
-GpuImage skyboxImages[COUNTOF(hdriPaths)];
+GpuImage skyboxImages[COUNTOF(hdriImagePaths)];
 uint32_t selectedSkybox = 0;
 
 VkSampler linearRepeatSampler;
-
-TracyVkCtx tracyContext;
 
 struct FrameData
 {
@@ -268,35 +258,6 @@ glm::vec4 lightDirsAndIntensitiesUI[MAX_LIGHTS];
 glm::vec2 prevCursorPos;
 bool firstCursorUpdate = true;
 bool cursorCaptured = false;
-
-void prepareAssets()
-{
-    ZoneScoped;
-    ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
-
-    initShaderCompiler();
-    for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
-    {
-        compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
-    }
-    terminateShaderCompiler();
-
-    for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
-    {
-#if SKIP_SCENE_REIMPORT
-        if (!pathExists(sceneInfos[i].sceneDirPath))
-#endif
-            importSceneFromGlb(sceneInfos[i].glbAssetPath, sceneInfos[i].sceneDirPath, sceneInfos[i].scalingFactor);
-    }
-
-    for (uint8_t i = 0; i < COUNTOF(materialInfos); i++)
-    {
-#if SKIP_MATERIAL_REIMPORT
-        if (!pathExists(materialInfos[i].dstSet.baseColorTexPath))
-#endif
-            importMaterial(materialInfos[i].srcSet, materialInfos[i].dstSet);
-    }
-}
 
 void initVulkan()
 {
@@ -374,22 +335,13 @@ void initVulkan()
     transferQueue = vkbDevice.get_queue(vkb::QueueType::transfer).value();
     transferQueueFamilyIndex = vkbDevice.get_queue_index(vkb::QueueType::transfer).value();
 
-    VmaVulkanFunctions vulkanFunctions = initVmaVulkanFunctions();
-    VmaAllocatorCreateInfo allocatorCreateInfo {};
-    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_2;
-    allocatorCreateInfo.physicalDevice = physicalDevice;
-    allocatorCreateInfo.device = device;
-    allocatorCreateInfo.instance = instance;
-    allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
-    vkVerify(vmaCreateAllocator(&allocatorCreateInfo, &allocator));
-
     tracyContext = TracyVkContextHostCalibrated(instance, physicalDevice, device, vkGetInstanceProcAddr, vkGetDeviceProcAddr);
 }
 
 void terminateVulkan()
 {
     TracyVkDestroy(tracyContext);
-    vmaDestroyAllocator(allocator);
+
     vkDestroyDevice(device, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
 #ifdef DEBUG
@@ -437,8 +389,7 @@ void initRenderTargets()
 {
     ZoneScoped;
     createSwapchain(windowExtent.width, windowExtent.height);
-    depthImage = createImage2D(allocator,
-        VK_FORMAT_D32_SFLOAT,
+    depthImage = createGpuImage2D(VK_FORMAT_D32_SFLOAT,
         windowExtent,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -447,7 +398,7 @@ void initRenderTargets()
 void terminateRenderTargets()
 {
     destroySwapchain();
-    destroyImage(allocator, depthImage);
+    destroyGpuImage(depthImage);
 }
 
 void recreateRenderTargets()
@@ -468,7 +419,7 @@ void recreateRenderTargets()
     initRenderTargets();
 }
 
-void initAuxiliary()
+void initFrameData()
 {
     ZoneScoped;
     VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex);
@@ -486,23 +437,9 @@ void initAuxiliary()
         vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frame.imageAcquiredSemaphore));
         vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frame.renderFinishedSemaphore));
     }
-
-    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &graphicsCommandPool));
-    commandBufferAllocateInfo.commandPool = graphicsCommandPool;
-    vkVerify(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &graphicsCmd));
-
-    commandPoolCreateInfo.queueFamilyIndex = computeQueueFamilyIndex;
-    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &computeCommandPool));
-    commandBufferAllocateInfo.commandPool = computeCommandPool;
-    vkVerify(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &computeCmd));
-
-    commandPoolCreateInfo.queueFamilyIndex = transferQueueFamilyIndex;
-    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &transferCommandPool));
-    commandBufferAllocateInfo.commandPool = transferCommandPool;
-    vkVerify(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &transferCmd));
 }
 
-void terminateAuxiliary()
+void terminateFrameData()
 {
     for (FrameData &frame : frames)
     {
@@ -511,10 +448,6 @@ void terminateAuxiliary()
         vkDestroySemaphore(device, frame.imageAcquiredSemaphore, nullptr);
         vkDestroySemaphore(device, frame.renderFinishedSemaphore, nullptr);
     }
-
-    vkDestroyCommandPool(device, graphicsCommandPool, nullptr);
-    vkDestroyCommandPool(device, computeCommandPool, nullptr);
-    vkDestroyCommandPool(device, transferCommandPool, nullptr);
 }
 
 void initDescriptors()
@@ -718,215 +651,33 @@ void terminateImgui()
     ImGui::DestroyContext();
 }
 
-void beginOneTimeCmd(VkCommandBuffer cmd, VkCommandPool commandPool)
-{
-    vkVerify(vkResetCommandPool(device, commandPool, 0));
-    VkCommandBufferBeginInfo commandBufferBeginInfo = initCommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    vkVerify(vkBeginCommandBuffer(cmd, &commandBufferBeginInfo));
-}
-
-void endAndSubmitOneTimeCmd(VkCommandBuffer cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, bool wait)
-{
-    VkFence fence = nullptr;
-
-    if (wait)
-    {
-        VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo();
-        vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &fence));
-    }
-
-    vkVerify(vkEndCommandBuffer(cmd));
-    VkCommandBufferSubmitInfoKHR cmdSubmitInfo = initCommandBufferSubmitInfo(cmd);
-    VkSubmitInfo2 submitInfo = initSubmitInfo(&cmdSubmitInfo, waitSemaphoreSubmitInfo, signalSemaphoreSubmitInfo);
-    vkVerify(vkQueueSubmit2KHR(queue, 1, &submitInfo, fence));
-
-    if (wait)
-    {
-        vkVerify(vkWaitForFences(device, 1, &fence, true, UINT64_MAX));
-        vkDestroyFence(device, fence, nullptr);
-    }
-}
-
-void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, bool dstQueueFamilyIsGraphics)
+void prepareAssets()
 {
     ZoneScoped;
-    VkSemaphore semaphore;
-    VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
-    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
-    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
-    uint32_t dstQueueFamilyIndex;
-    VkQueue dstQueue;
-    VkCommandBuffer dstCmd;
-    VkCommandPool dstCmdPool;
-    VkPipelineStageFlags2KHR dstStageMask;
-
-    if (dstQueueFamilyIsGraphics)
+    initShaderCompiler();
+    for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
     {
-        dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        dstQueue = graphicsQueue;
-        dstCmd = graphicsCmd;
-        dstCmdPool = graphicsCommandPool;
-        dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR;
+        compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
     }
-    else
+    terminateShaderCompiler();
+
+    for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
     {
-        dstQueueFamilyIndex = computeQueueFamilyIndex;
-        dstQueue = computeQueue;
-        dstCmd = computeCmd;
-        dstCmdPool = computeCommandPool;
-        dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
+#if SKIP_SCENE_REIMPORT
+        if (!pathExists(sceneInfos[i].sceneDirPath))
+#endif
+            importSceneFromGlb(sceneInfos[i].glbAssetPath, sceneInfos[i].sceneDirPath, sceneInfos[i].scalingFactor);
     }
 
-    beginOneTimeCmd(transferCmd, transferCommandPool);
-    vkCmdCopyBuffer(transferCmd, stagingBuffer.buffer, buffer, copyRegionCount, copyRegions);
-    BufferBarrier bufferBarrier {};
-    bufferBarrier.buffer = buffer;
-    bufferBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
-    bufferBarrier.srcAccessMask = AccessFlags::Write;
-    bufferBarrier.srcQueueFamilyIndex = transferQueueFamilyIndex;
-    bufferBarrier.dstQueueFamilyIndex = dstQueueFamilyIndex;
-    pipelineBarrier(transferCmd, &bufferBarrier, 1, nullptr, 0);
-    endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, &ownershipReleaseFinishedInfo, false);
-
-    beginOneTimeCmd(dstCmd, dstCmdPool);
-    bufferBarrier = {};
-    bufferBarrier.buffer = buffer;
-    bufferBarrier.dstStageMask = dstStageMask;
-    bufferBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
-    bufferBarrier.srcQueueFamilyIndex = transferQueueFamilyIndex;
-    bufferBarrier.dstQueueFamilyIndex = dstQueueFamilyIndex;
-    pipelineBarrier(dstCmd, &bufferBarrier, 1, nullptr, 0);
-    endAndSubmitOneTimeCmd(dstCmd, dstQueue, &ownershipReleaseFinishedInfo, nullptr, true);
-
-    vkDestroySemaphore(device, semaphore, nullptr);
-}
-
-void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, bool dstQueueFamilyIsGraphics)
-{
-    ZoneScoped;
-    VkSemaphore semaphore;
-    VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
-    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
-    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
-
-    uint32_t dstQueueFamilyIndex;
-    VkQueue dstQueue;
-    VkCommandBuffer dstCmd;
-    VkCommandPool dstCmdPool;
-    VkPipelineStageFlags2KHR dstStageMask;
-
-    if (dstQueueFamilyIsGraphics)
+    for (uint8_t i = 0; i < COUNTOF(materialInfos); i++)
     {
-        dstQueueFamilyIndex = graphicsQueueFamilyIndex;
-        dstQueue = graphicsQueue;
-        dstCmd = graphicsCmd;
-        dstCmdPool = graphicsCommandPool;
-        dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR;
+#if SKIP_MATERIAL_REIMPORT
+        if (!pathExists(materialInfos[i].dstSet.baseColorTexPath))
+#endif
+            importMaterial(materialInfos[i].srcSet, materialInfos[i].dstSet);
     }
-    else
-    {
-        dstQueueFamilyIndex = computeQueueFamilyIndex;
-        dstQueue = computeQueue;
-        dstCmd = computeCmd;
-        dstCmdPool = computeCommandPool;
-        dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-    }
-
-    beginOneTimeCmd(transferCmd, transferCommandPool);
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = image;
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE_KHR;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
-    imageBarrier.srcAccessMask = AccessFlags::None;
-    imageBarrier.dstAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdCopyBufferToImage(transferCmd, stagingBuffer.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegionCount, copyRegions);
-    imageBarrier = {};
-    imageBarrier.image = image;
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
-    imageBarrier.srcAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageBarrier.srcQueueFamilyIndex = transferQueueFamilyIndex;
-    imageBarrier.dstQueueFamilyIndex = dstQueueFamilyIndex;
-    pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-    endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, &ownershipReleaseFinishedInfo, false);
-
-    beginOneTimeCmd(dstCmd, dstCmdPool);
-    imageBarrier = {};
-    imageBarrier.image = image;
-    imageBarrier.dstStageMask = dstStageMask;
-    imageBarrier.dstAccessMask = AccessFlags::Read;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageBarrier.srcQueueFamilyIndex = transferQueueFamilyIndex;
-    imageBarrier.dstQueueFamilyIndex = dstQueueFamilyIndex;
-    pipelineBarrier(dstCmd, nullptr, 0, &imageBarrier, 1);
-    endAndSubmitOneTimeCmd(dstCmd, dstQueue, &ownershipReleaseFinishedInfo, nullptr, true);
-
-    vkDestroySemaphore(device, semaphore, nullptr);
-}
-
-void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, VkImageLayout oldLayout, bool srcQueueFamilyIsGraphics)
-{
-    ZoneScoped;
-    VkSemaphore semaphore;
-    VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
-    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
-    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
-
-    uint32_t srcQueueFamilyIndex;
-    VkQueue srcQueue;
-    VkCommandBuffer srcCmd;
-    VkCommandPool srcCmdPool;
-    VkPipelineStageFlags2KHR srcStageMask;
-
-    if (srcQueueFamilyIsGraphics)
-    {
-        srcQueueFamilyIndex = graphicsQueueFamilyIndex;
-        srcQueue = graphicsQueue;
-        srcCmd = graphicsCmd;
-        srcCmdPool = graphicsCommandPool;
-        srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT_KHR;
-    }
-    else
-    {
-        srcQueueFamilyIndex = computeQueueFamilyIndex;
-        srcQueue = computeQueue;
-        srcCmd = computeCmd;
-        srcCmdPool = computeCommandPool;
-        srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-    }
-
-    beginOneTimeCmd(srcCmd, srcCmdPool);
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = image;
-    imageBarrier.srcStageMask = srcStageMask;
-    imageBarrier.srcAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = oldLayout;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageBarrier.srcQueueFamilyIndex = srcQueueFamilyIndex;
-    imageBarrier.dstQueueFamilyIndex = transferQueueFamilyIndex;
-    pipelineBarrier(srcCmd, nullptr, 0, &imageBarrier, 1);
-    endAndSubmitOneTimeCmd(srcCmd, srcQueue, nullptr, &ownershipReleaseFinishedInfo, false);
-
-    beginOneTimeCmd(transferCmd, transferCommandPool);
-    imageBarrier = {};
-    imageBarrier.image = image;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
-    imageBarrier.dstAccessMask = AccessFlags::Read;
-    imageBarrier.oldLayout = oldLayout;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageBarrier.srcQueueFamilyIndex = srcQueueFamilyIndex;
-    imageBarrier.dstQueueFamilyIndex = transferQueueFamilyIndex;
-    pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdCopyImageToBuffer(transferCmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer.buffer, copyRegionCount, copyRegions);
-    endAndSubmitOneTimeCmd(transferCmd, transferQueue, &ownershipReleaseFinishedInfo, nullptr, true);
-
-    vkDestroySemaphore(device, semaphore, nullptr);
 }
 
 void loadModel(const char *sceneDirPath)
@@ -968,8 +719,7 @@ void loadModel(const char *sceneDirPath)
 
     if (!modelBuffer.buffer)
     {
-        modelBuffer = createBuffer(allocator,
-            maxBufferSize,
+        modelBuffer = createGpuBuffer(maxBufferSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             0);
@@ -989,7 +739,7 @@ void loadModel(const char *sceneDirPath)
         {transformsOffset, maxTransformsOffset, transformsSize},
         {materialsOffset, maxMaterialsOffset, materialsSize}
     };
-    copyStagingBufferToBuffer(modelBuffer.buffer, copies, COUNTOF(copies), true);
+    copyStagingBufferToBuffer(modelBuffer.buffer, copies, COUNTOF(copies), QueueFamily::Graphics);
 
     VkDescriptorBufferInfo bufferInfos[]
     {
@@ -1002,7 +752,7 @@ void loadModel(const char *sceneDirPath)
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
-        destroyImage(allocator, modelTextures[i]);
+        destroyGpuImage(modelTextures[i]);
     }
 
     ASSERT(model.imagePaths.size() < UINT8_MAX);
@@ -1014,8 +764,7 @@ void loadModel(const char *sceneDirPath)
         ZoneScopedN("Load Texture");
         ZoneText(model.imagePaths[i].data(), model.imagePaths[i].length());
         Image image = loadImage(model.imagePaths[i].data());
-        modelTextures[i] = createImage2D(allocator,
-            image.format,
+        modelTextures[i] = createGpuImage2D(image.format,
             { image.width, image.height },
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
@@ -1029,7 +778,7 @@ void loadModel(const char *sceneDirPath)
         copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copyRegion.imageSubresource.layerCount = 1;
         copyRegion.imageExtent = modelTextures[i].imageExtent;
-        copyStagingBufferToImage(modelTextures[i].image, &copyRegion, 1, true);
+        copyStagingBufferToImage(modelTextures[i].image, &copyRegion, 1, QueueFamily::Graphics);
     }
 
     VkWriteDescriptorSet writes[]
@@ -1043,140 +792,6 @@ void loadModel(const char *sceneDirPath)
     };
 
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
-}
-
-void generateSkybox(const char *hdriPath)
-{
-    static constexpr uint32_t skyboxSize = 2048;
-    ZoneScoped;
-    VkDescriptorSetLayoutBinding setBindings[]
-    {
-        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearRepeatSampler}
-    };
-    VkDescriptorSetLayout setLayout;
-    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings));
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &setLayout));
-    VkDescriptorSet set;
-    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &setLayout, 1);
-    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &set));
-
-    uint32_t workGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
-    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
-    uint32_t workGroupCount = (skyboxSize + workGroupSize - 1) / workGroupSize;
-
-    while (maxInvocations < workGroupSize * workGroupSize)
-    {
-        workGroupSize /= 2;
-        workGroupCount *= 2;
-    }
-
-    VkSpecializationMapEntry specEntries[]
-    {
-        {0, 0, sizeof(uint32_t)}
-    };
-    uint32_t specData[] { workGroupSize };
-    VkSpecializationInfo specInfo { COUNTOF(specEntries), specEntries,  sizeof(specData), specData };
-    VkShaderModule generateSkyboxShader = createShaderModuleFromSpv(device, shaderInfos[4].shaderSpvPath);
-    VkPipelineShaderStageCreateInfo shaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, generateSkyboxShader, &specInfo);
-
-    VkPipelineLayout generateSkyboxPipelineLayout;
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&setLayout, 1);
-    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &generateSkyboxPipelineLayout));
-
-    VkPipeline generateSkyboxPipeline;
-    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
-    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
-
-    Image image = importImage(hdriPath, ImagePurpose::HDRI);
-    memcpy((char *)stagingBuffer.mappedData, image.data, image.faceSize);
-    GpuImage hdriGpuImage = createImage2D(allocator,
-        image.format,
-        { image.width, image.height },
-        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT);
-    freeImage(image);
-
-    VkBufferImageCopy copyRegion {};
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageExtent = hdriGpuImage.imageExtent;
-    copyStagingBufferToImage(hdriGpuImage.image, &copyRegion, 1, false);
-
-    GpuImage skyboxGpuImage = createImage2DArray(allocator,
-        VK_FORMAT_R16G16B16A16_SFLOAT,
-        { skyboxSize, skyboxSize },
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        false);
-
-    VkDescriptorImageInfo imageInfos[2]
-    {
-        { nullptr, hdriGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL }
-    };
-    VkWriteDescriptorSet writes[2]
-    {
-        initWriteDescriptorSetImage(set, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
-        initWriteDescriptorSetImage(set, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
-    };
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
-
-    beginOneTimeCmd(computeCmd, computeCommandPool);
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = skyboxGpuImage.image;
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE_KHR;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
-    imageBarrier.srcAccessMask = AccessFlags::None;
-    imageBarrier.dstAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
-    vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &set, 0, nullptr);
-    vkCmdDispatch(computeCmd, workGroupCount, workGroupCount, 1);
-    endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, true);
-
-    uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * 4 * sizeof(uint16_t);
-    VkBufferImageCopy copyRegions[6] {};
-    for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
-    {
-        copyRegions[j].bufferOffset = j * skyboxImageLayerSize;
-        copyRegions[j].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegions[j].imageSubresource.mipLevel = 0;
-        copyRegions[j].imageSubresource.baseArrayLayer = j;
-        copyRegions[j].imageSubresource.layerCount = 1;
-        copyRegions[j].imageExtent = { skyboxSize, skyboxSize, 1 };
-    }
-    copyImageToStagingBuffer(skyboxGpuImage.image, copyRegions, COUNTOF(copyRegions), VK_IMAGE_LAYOUT_GENERAL, false);
-
-    image = {};
-    image.faceSize = skyboxImageLayerSize;
-    image.faceCount = 6;
-    image.levelCount = 1;
-    image.width = skyboxSize;
-    image.height = skyboxSize;
-    image.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    image.purpose = ImagePurpose::HDRI;
-    image.data = new unsigned char[image.faceCount * image.faceSize];
-    memcpy(image.data, stagingBuffer.mappedData, image.faceCount * image.faceSize);
-
-    char skyboxImagePath[256];
-    const char *hdriFilename;
-    size_t hdriFilenameLength;
-    cwk_path_get_basename_wout_extension(hdriPath, &hdriFilename, &hdriFilenameLength);
-    snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s.ktx2", skyboxesPath, (uint32_t)hdriFilenameLength, hdriFilename);
-
-    writeImage(image, skyboxImagePath);
-    delete[] image.data;
-
-    vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
-    vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
-    vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
-    vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
-    destroyImage(allocator, hdriGpuImage);
-    destroyImage(allocator, skyboxGpuImage);
 }
 
 void loadSkybox(const char *scenePath)
@@ -1193,8 +808,7 @@ void loadSkybox(const char *scenePath)
 
     if (!skyboxBuffer.buffer)
     {
-        skyboxBuffer = createBuffer(allocator,
-            bufferSize,
+        skyboxBuffer = createGpuBuffer(bufferSize,
             VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             0);
@@ -1208,30 +822,29 @@ void loadSkybox(const char *scenePath)
         {indicesOffset, indicesOffset, indicesSize},
         {positionsOffset, positionsOffset, positionsSize}
     };
-    copyStagingBufferToBuffer(skyboxBuffer.buffer, copies, COUNTOF(copies), true);
+    copyStagingBufferToBuffer(skyboxBuffer.buffer, copies, COUNTOF(copies), QueueFamily::Graphics);
 
     VkDescriptorBufferInfo bufferInfos[]
     {
         {skyboxBuffer.buffer, positionsOffset, positionsSize},
     };
-    VkDescriptorImageInfo imageInfos[COUNTOF(hdriPaths)];
+    VkDescriptorImageInfo imageInfos[COUNTOF(hdriImagePaths)];
 
-    for (uint8_t i = 0; i < COUNTOF(hdriPaths); i++)
+    for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
     {
         char skyboxImagePath[256];
         const char *hdriFilename;
         size_t hdriFilenameLength;
-        cwk_path_get_basename_wout_extension(hdriPaths[i], &hdriFilename, &hdriFilenameLength);
+        cwk_path_get_basename_wout_extension(hdriImagePaths[i], &hdriFilename, &hdriFilenameLength);
         snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s.ktx2", skyboxesPath, (uint32_t)hdriFilenameLength, hdriFilename);
 
 #if SKIP_SKYBOX_REIMPORT
         if (!pathExists(skyboxImagePath))
 #endif
-            generateSkybox(hdriPaths[i]);
+            generateSkybox(hdriImagePaths[i], skyboxImagePath);
 
         Image image = loadImage(skyboxImagePath);
-        skyboxImages[i] = createImage2DArray(allocator,
-            image.format,
+        skyboxImages[i] = createGpuImage2DArray(image.format,
             { image.width, image.height },
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1249,7 +862,7 @@ void loadSkybox(const char *scenePath)
         }
 
         memcpy(stagingBuffer.mappedData, image.data, image.faceCount * image.faceSize);
-        copyStagingBufferToImage(skyboxImages[i].image, copyRegions, COUNTOF(copyRegions), true);
+        copyStagingBufferToImage(skyboxImages[i].image, copyRegions, COUNTOF(copyRegions), QueueFamily::Graphics);
         freeImage(image);
         imageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     }
@@ -1257,7 +870,7 @@ void loadSkybox(const char *scenePath)
     VkWriteDescriptorSet writes[]
     {
         initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos),
-        initWriteDescriptorSetImage(skyboxDescriptorSet, 1, COUNTOF(hdriPaths), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos),
+        initWriteDescriptorSetImage(skyboxDescriptorSet, 1, COUNTOF(hdriImagePaths), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos),
     };
 
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
@@ -1293,8 +906,7 @@ void loadLights()
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t bufferSize = aligned(sizeof(LightingData), uboAlignment) + aligned(sizeof(CameraData), uboAlignment) * maxFramesInFlight;
 
-    globalUniformBuffer = createBuffer(allocator,
-        bufferSize,
+    globalUniformBuffer = createGpuBuffer(bufferSize,
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
@@ -1316,11 +928,7 @@ void loadLights()
 void initScene()
 {
     ZoneScoped;
-    stagingBuffer = createBuffer(allocator,
-        256 * 1024 * 1024,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    prepareAssets();
 
     loadModel(sceneInfos[selectedScene].sceneDirPath);
     loadSkybox(sceneInfos[0].sceneDirPath);
@@ -1332,19 +940,18 @@ void initScene()
 
 void terminateScene()
 {
-    destroyBuffer(allocator, stagingBuffer);
-    destroyBuffer(allocator, modelBuffer);
-    destroyBuffer(allocator, skyboxBuffer);
-    destroyBuffer(allocator, globalUniformBuffer);
+    destroyGpuBuffer(modelBuffer);
+    destroyGpuBuffer(skyboxBuffer);
+    destroyGpuBuffer(globalUniformBuffer);
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
-        destroyImage(allocator, modelTextures[i]);
+        destroyGpuImage(modelTextures[i]);
     }
 
     for (uint8_t i = 0; i < COUNTOF(skyboxImages); i++)
     {
-        destroyImage(allocator, skyboxImages[i]);
+        destroyGpuImage(skyboxImages[i]);
     }
 }
 
@@ -1396,10 +1003,6 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
 void init()
 {
     ZoneScoped;
-
-    initJobSystem();
-    prepareAssets();
-
     VERIFY(glfwInit());
     const GLFWvidmode *videoMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
     windowExtent = { (uint32_t)(0.75f * videoMode->width), (uint32_t)(0.75f * videoMode->height) };
@@ -1411,12 +1014,15 @@ void init()
     glfwSetMouseButtonCallback(window, glfwMouseButtonCallback);
 
     initVulkan();
+    initGraphics();
     initRenderTargets();
     initDescriptors();
     initPipelines();
-    initAuxiliary();
+    initFrameData();
     initImgui();
     initRenderdoc();
+    initJobSystem();
+    initImageUtils(shaderInfos[4].shaderSpvPath, nullptr);
 
     initScene();
 }
@@ -1427,17 +1033,18 @@ void exit()
 
     terminateScene();
 
+    terminateImageUtils();
+    terminateJobSystem();
     terminateImgui();
-    terminateAuxiliary();
+    terminateFrameData();
     terminatePipelines();
     terminateDescriptors();
     terminateRenderTargets();
+    terminateGraphics();
     terminateVulkan();
 
     glfwDestroyWindow(window);
     glfwTerminate();
-
-    terminateJobSystem();
 }
 
 void updateInput()
@@ -1598,13 +1205,13 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Skybox");
         ImGui::TableNextColumn();
-        cwk_path_get_basename(hdriPaths[selectedSkybox], &basename, nullptr);
+        cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
         if (ImGui::BeginCombo("##skybox", basename, ImGuiComboFlags_WidthFitPreview))
         {
-            for (uint8_t i = 0; i < COUNTOF(hdriPaths); i++)
+            for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
             {
                 bool selected = i == selectedSkybox;
-                cwk_path_get_basename(hdriPaths[i], &basename, nullptr);
+                cwk_path_get_basename(hdriImagePaths[i], &basename, nullptr);
                 if (ImGui::Selectable(basename, selected) && !selected)
                 {
                     selectedSkybox = i;
