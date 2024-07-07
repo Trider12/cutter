@@ -85,10 +85,6 @@ Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
         image.format = VK_FORMAT_R8G8B8A8_SRGB;
         break;
     case ImagePurpose::Normal:
-        image.data = stbi_load_from_memory(data, dataSize, &w, &h, nullptr, STBI_rgb);
-        image.faceSize = w * h * STBI_rgb;
-        image.format = VK_FORMAT_R8G8B8_UNORM;
-        break;
     case ImagePurpose::Shading:
         image.data = stbi_load_from_memory(data, dataSize, &w, &h, nullptr, STBI_rgb_alpha);
         image.faceSize = w * h * STBI_rgb_alpha;
@@ -132,27 +128,27 @@ struct CompressBlockRowOptions
 {
     uint16_t blockCountX;
     uint16_t imageWidth;
-    uint8_t channelCount;
     uint8_t *src;
     uint8_t *dst;
 };
 
 static constexpr uint8_t srcBlockSizeInTexels = 4;
 static constexpr uint8_t dstBlockSizeInBytes = 16;
+static constexpr uint8_t channelCount = 4;
 
 static void compressBlockRowBC7(int64_t rowIndex, void *userData)
 {
     ZoneScoped;
     ASSERT(userData);
     CompressBlockRowOptions &opt = *(CompressBlockRowOptions *)userData;
-    const uint32_t stride = opt.imageWidth * opt.channelCount;
+    const uint32_t stride = opt.imageWidth * channelCount;
     const uint8_t *srcBlock = opt.src + rowIndex * stride * srcBlockSizeInTexels;
     uint8_t *dstBlock = opt.dst + rowIndex * opt.blockCountX * dstBlockSizeInBytes;
 
     for (uint32_t x = 0; x < opt.blockCountX; x++)
     {
         CompressBlockBC7(srcBlock, stride, dstBlock, optionsBC7);
-        srcBlock += srcBlockSizeInTexels * opt.channelCount;
+        srcBlock += srcBlockSizeInTexels * channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
 }
@@ -162,7 +158,7 @@ static void compressBlockRowBC5CopyChannels(int64_t rowIndex, void *userData)
     ZoneScoped;
     ASSERT(userData);
     CompressBlockRowOptions &opt = *(CompressBlockRowOptions *)userData;
-    const uint32_t stride = opt.imageWidth * opt.channelCount;
+    const uint32_t stride = opt.imageWidth * channelCount;
     const uint8_t *srcBlock = opt.src + rowIndex * stride * srcBlockSizeInTexels;
     uint8_t *dstBlock = opt.dst + rowIndex * opt.blockCountX * dstBlockSizeInBytes;
     uint8_t red[16], green[16]; // deinterleave red and green channels
@@ -173,7 +169,7 @@ static void compressBlockRowBC5CopyChannels(int64_t rowIndex, void *userData)
         for (uint8_t i = 0; i < 4; i++, srcRow += stride)
         {
             const uint8_t *srcTexel = srcRow;
-            for (uint8_t j = 0; j < 4; j++, srcTexel += opt.channelCount)
+            for (uint8_t j = 0; j < 4; j++, srcTexel += channelCount)
             {
                 uint32_t index = i * 4 + j;
                 red[index] = srcTexel[0];
@@ -182,7 +178,7 @@ static void compressBlockRowBC5CopyChannels(int64_t rowIndex, void *userData)
         }
 
         CompressBlockBC5(red, 4, green, 4, dstBlock, optionsBC5);
-        srcBlock += srcBlockSizeInTexels * opt.channelCount;
+        srcBlock += srcBlockSizeInTexels * channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
 }
@@ -192,7 +188,7 @@ static void compressBlockRowBC6CopyChannels(int64_t blockRowIndex, void *userDat
     ZoneScoped;
     ASSERT(userData);
     CompressBlockRowOptions &opt = *(CompressBlockRowOptions *)userData;
-    const uint32_t stride = opt.imageWidth * opt.channelCount;
+    const uint32_t stride = opt.imageWidth * channelCount;
     const uint16_t *srcBlock = (const uint16_t *)opt.src + blockRowIndex * stride * srcBlockSizeInTexels;
     uint8_t *dstBlock = opt.dst + blockRowIndex * opt.blockCountX * dstBlockSizeInBytes;
     uint16_t rgb[16][3]; // copy red, green and blue channels
@@ -203,7 +199,7 @@ static void compressBlockRowBC6CopyChannels(int64_t blockRowIndex, void *userDat
         for (uint8_t i = 0; i < 4; i++, srcRow += stride)
         {
             const uint16_t *srcTexel = srcRow;
-            for (uint8_t j = 0; j < 4; j++, srcTexel += opt.channelCount)
+            for (uint8_t j = 0; j < 4; j++, srcTexel += channelCount)
             {
                 uint32_t index = i * 4 + j;
                 memcpy(rgb[index], srcTexel, 3 * sizeof(uint16_t));
@@ -211,35 +207,35 @@ static void compressBlockRowBC6CopyChannels(int64_t blockRowIndex, void *userDat
         }
 
         CompressBlockBC6(rgb[0], 4 * 3, dstBlock, optionsBC6);
-        srcBlock += srcBlockSizeInTexels * opt.channelCount;
+        srcBlock += srcBlockSizeInTexels * channelCount;
         dstBlock += dstBlockSizeInBytes;
     }
 }
 
-void writeImage(Image &image, const char *outImageFilename)
+static uint8_t *compressImage(const Image &image, uint32_t &compressedFaceSize, VkFormat &compressedFormat)
 {
-    ZoneScoped;
-    ASSERT(outImageFilename && *outImageFilename);
-    ZoneText(outImageFilename, strlen(outImageFilename));
     ASSERT(image.width % srcBlockSizeInTexels == 0 && image.height % srcBlockSizeInTexels == 0);
-    ASSERT(image.faceCount == 1 || image.faceCount == 6);
-    ASSERT(image.levelCount == 1);
-
-    VkFormat dstFormat = VK_FORMAT_UNDEFINED;
-    uint8_t channelCount = 0;
     JobFunc jobFunc = nullptr;
 
     switch (image.purpose)
     {
     case ImagePurpose::Color:
-    case ImagePurpose::Shading:
     {
-        if (image.format == VK_FORMAT_BC7_SRGB_BLOCK || image.format == VK_FORMAT_BC7_UNORM_BLOCK)
+        if (image.format == VK_FORMAT_BC7_SRGB_BLOCK)
             break;
 
-        ASSERT(image.format == VK_FORMAT_R8G8B8A8_SRGB || image.format == VK_FORMAT_R8G8B8A8_UNORM);
-        dstFormat = image.purpose == ImagePurpose::Color ? VK_FORMAT_BC7_SRGB_BLOCK : image.purpose == ImagePurpose::Shading ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
-        channelCount = 4;
+        ASSERT(image.format == VK_FORMAT_R8G8B8A8_SRGB);
+        compressedFormat = VK_FORMAT_BC7_SRGB_BLOCK;
+        jobFunc = compressBlockRowBC7;
+        break;
+    }
+    case ImagePurpose::Shading:
+    {
+        if (image.format == VK_FORMAT_BC7_UNORM_BLOCK)
+            break;
+
+        ASSERT(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+        compressedFormat = VK_FORMAT_BC7_UNORM_BLOCK;
         jobFunc = compressBlockRowBC7;
         break;
     }
@@ -248,9 +244,8 @@ void writeImage(Image &image, const char *outImageFilename)
         if (image.format == VK_FORMAT_BC5_UNORM_BLOCK)
             break;
 
-        ASSERT(image.format == VK_FORMAT_R8G8B8_UNORM || image.format == VK_FORMAT_R8G8B8A8_UNORM);
-        dstFormat = VK_FORMAT_BC5_UNORM_BLOCK;
-        channelCount = image.format == VK_FORMAT_R8G8B8_UNORM ? 3 : image.format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 0;
+        ASSERT(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+        compressedFormat = VK_FORMAT_BC5_UNORM_BLOCK;
         jobFunc = compressBlockRowBC5CopyChannels;
         break;
     }
@@ -259,55 +254,60 @@ void writeImage(Image &image, const char *outImageFilename)
         if (image.format == VK_FORMAT_BC6H_UFLOAT_BLOCK)
             break;
 
-        ASSERT(image.format == VK_FORMAT_R16G16B16_SFLOAT || image.format == VK_FORMAT_R16G16B16A16_SFLOAT);
-        dstFormat = VK_FORMAT_BC6H_UFLOAT_BLOCK;
-        channelCount = image.format == VK_FORMAT_R16G16B16_SFLOAT ? 3 : image.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 4 : 0;
+        ASSERT(image.format == VK_FORMAT_R16G16B16A16_SFLOAT);
+        compressedFormat = VK_FORMAT_BC6H_UFLOAT_BLOCK;
         jobFunc = compressBlockRowBC6CopyChannels;
         break;
     }
     default:
         ASSERT(false);
-        return;
+        return nullptr;
     }
 
-    uint32_t dstDataFaceSize = 0;
-    uint8_t *dstData = nullptr;
+    uint16_t blockCountX = image.width / srcBlockSizeInTexels, blockCountY = image.height / srcBlockSizeInTexels;
+    compressedFaceSize = blockCountX * blockCountY * dstBlockSizeInBytes;
+    uint8_t *compressedData = new uint8_t[image.faceCount * compressedFaceSize];
+    JobInfo *jobInfos = new JobInfo[blockCountY];
+    CompressBlockRowOptions *options = (CompressBlockRowOptions *)alloca(image.faceCount * sizeof(CompressBlockRowOptions));
+    Token token = createToken();
 
-    if (dstFormat)
+    for (uint8_t i = 0; i < image.faceCount; i++)
     {
-        ASSERT(channelCount);
-        const uint16_t blockCountX = image.width / srcBlockSizeInTexels, blockCountY = image.height / srcBlockSizeInTexels;
-        dstDataFaceSize = blockCountX * blockCountY * dstBlockSizeInBytes;
-        dstData = new uint8_t[image.faceCount * dstDataFaceSize];
-        CompressBlockRowOptions *options = (CompressBlockRowOptions *)alloca(image.faceCount * sizeof(CompressBlockRowOptions));
-        JobInfo *jobInfos = new JobInfo[blockCountY];
-        Token token = createToken();
+        options[i].blockCountX = blockCountX;
+        options[i].imageWidth = image.width;
+        options[i].src = image.data + i * image.faceSize;
+        options[i].dst = compressedData + i * compressedFaceSize;
 
-        for (uint8_t i = 0; i < image.faceCount; i++)
+        for (uint32_t y = 0; y < blockCountY; y++)
         {
-            options[i].blockCountX = blockCountX;
-            options[i].imageWidth = image.width;
-            options[i].channelCount = channelCount;
-            options[i].src = image.data + i * image.faceSize;
-            options[i].dst = dstData + i * dstDataFaceSize;
-
-            for (uint32_t y = 0; y < blockCountY; y++)
-            {
-                jobInfos[y] = { jobFunc, y, &options[i] };
-            }
-
-            enqueueJobs(jobInfos, blockCountY, token);
+            jobInfos[y] = { jobFunc, y, &options[i] };
         }
 
-        delete[] jobInfos;
-        waitForToken(token);
-        destroyToken(token);
+        enqueueJobs(jobInfos, blockCountY, token);
     }
 
-    ASSERT((!dstData && !dstFormat) || (dstData && dstFormat));
+    delete[] jobInfos;
+    waitForToken(token);
+    destroyToken(token);
+
+    return compressedData;
+}
+
+void writeImage(Image &image, const char *outImageFilename)
+{
+    ZoneScoped;
+    ASSERT(outImageFilename && *outImageFilename);
+    ZoneText(outImageFilename, strlen(outImageFilename));
+    ASSERT(image.faceCount == 1 || image.faceCount == 6);
+    ASSERT(image.levelCount == 1);
+
+    uint32_t compressedFaceSize;
+    VkFormat compressedFormat;
+    uint8_t *compressedData = compressImage(image, compressedFaceSize, compressedFormat);
+
     ktxTexture2 *texture;
     ktxTextureCreateInfo createInfo {};
-    createInfo.vkFormat = dstData ? dstFormat : image.format;
+    createInfo.vkFormat = compressedData ? compressedFormat : image.format;
     createInfo.baseWidth = image.width;
     createInfo.baseHeight = image.height;
     createInfo.baseDepth = 1;
@@ -322,8 +322,8 @@ void writeImage(Image &image, const char *outImageFilename)
 
     for (uint8_t i = 0; i < image.faceCount; i++)
     {
-        const uint8_t *data = dstData ? dstData + i * dstDataFaceSize : image.data + i * image.faceSize;
-        const uint32_t size = dstData ? dstDataFaceSize : image.faceSize;
+        const uint8_t *data = compressedData ? compressedData + i * compressedFaceSize : image.data + i * image.faceSize;
+        const uint32_t size = compressedData ? compressedFaceSize : image.faceSize;
         VERIFY(ktxTexture_SetImageFromMemory(ktxTexture(texture), 0, 0, i, data, size) == KTX_SUCCESS);
     }
 
@@ -334,7 +334,7 @@ void writeImage(Image &image, const char *outImageFilename)
     writeFile(outImageFilename, fileData, (uint32_t)fileDataSize);
     free(fileData);
 
-    delete[] dstData;
+    delete[] compressedData;
 }
 
 static ktx_error_code_e iterateCallback(int miplevel, int face,
