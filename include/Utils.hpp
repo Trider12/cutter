@@ -27,6 +27,18 @@
 #include <alloca.h> // for alloca
 #endif
 
+#define defineEnumOperators(enumType, intType) \
+inline intType  operator+(enumType a) { return (intType)a; } \
+inline enumType operator~(enumType a) { return (enumType)(~(intType)a); } \
+inline enumType operator&(enumType a, enumType b) { return (enumType)((intType)a & (intType)b); } \
+inline enumType operator|(enumType a, enumType b) { return (enumType)((intType)a | (intType)b); } \
+inline intType  operator&(enumType a, intType b) { return (intType)a & b; } \
+inline intType  operator|(enumType a, intType b) { return (intType)a | b; } \
+inline intType  operator&(intType a, enumType b) { return a & (intType)b; } \
+inline intType  operator|(intType a, enumType b) { return a | (intType)b; } \
+
+#define EnumBool(enumType) enum class enumType : uint8_t { No = 0, Yes = 1 }
+
 inline uint32_t max(uint32_t a, uint32_t b)
 {
     return a > b ? a : b;
@@ -37,8 +49,14 @@ inline uint32_t min(uint32_t a, uint32_t b)
     return a < b ? a : b;
 }
 
+inline bool isPowerOf2(uint32_t value)
+{
+    return value && !(value & (value - 1));
+}
+
 inline uint32_t aligned(uint32_t value, uint32_t alignment) // alignment must be a power of 2!
 {
+    ASSERT(isPowerOf2(alignment));
     return (value + alignment - 1) & ~(alignment - 1);
 }
 

@@ -120,12 +120,14 @@ VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32
     return imageCreateInfo;
 }
 
-VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectFlags)
+VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask, uint32_t baseMipLevel, uint32_t levelCount, uint32_t baseArrayLayer, uint32_t layerCount)
 {
     VkImageSubresourceRange imageSubresourceRange {};
-    imageSubresourceRange.aspectMask = aspectFlags;
-    imageSubresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-    imageSubresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    imageSubresourceRange.aspectMask = aspectMask;
+    imageSubresourceRange.baseMipLevel = baseMipLevel;
+    imageSubresourceRange.levelCount = levelCount ? levelCount : VK_REMAINING_MIP_LEVELS;
+    imageSubresourceRange.baseArrayLayer = baseArrayLayer;
+    imageSubresourceRange.layerCount = layerCount ? layerCount : VK_REMAINING_ARRAY_LAYERS;
 
     return imageSubresourceRange;
 }
@@ -148,9 +150,11 @@ VkSamplerCreateInfo initSamplerCreateInfo(VkFilter filter, VkSamplerAddressMode 
     samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerCreateInfo.minFilter = filter;
     samplerCreateInfo.magFilter = filter;
+    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerCreateInfo.addressModeU = addressMode;
     samplerCreateInfo.addressModeV = addressMode;
     samplerCreateInfo.addressModeW = addressMode;
+    samplerCreateInfo.maxLod = 1024;
 
     return samplerCreateInfo;
 }

@@ -29,7 +29,7 @@ VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageF
 
 VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags);
 
-VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectFlags);
+VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask, uint32_t baseMipLevel = 0, uint32_t levelCount = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 0);
 
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags);
 

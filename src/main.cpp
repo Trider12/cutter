@@ -21,9 +21,9 @@
 #include "VkUtils.hpp"
 
 // skip importing if already exist
-#define SKIP_SCENE_REIMPORT 1
-#define SKIP_MATERIAL_REIMPORT 1
-#define SKIP_SKYBOX_REIMPORT 1
+#define SKIP_SCENE_REIMPORT 0
+#define SKIP_MATERIAL_REIMPORT 0
+#define SKIP_SKYBOX_REIMPORT 0
 
 GLFWwindow *window;
 
@@ -390,7 +390,7 @@ void initRenderTargets()
     ZoneScoped;
     createSwapchain(windowExtent.width, windowExtent.height);
     depthImage = createGpuImage2D(VK_FORMAT_D32_SFLOAT,
-        windowExtent,
+        windowExtent, 1,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT);
 }
@@ -764,21 +764,10 @@ void loadModel(const char *sceneDirPath)
         ZoneScopedN("Load Texture");
         ZoneText(model.imagePaths[i].data(), model.imagePaths[i].length());
         Image image = loadImage(model.imagePaths[i].data());
-        modelTextures[i] = createGpuImage2D(image.format,
-            { image.width, image.height },
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT);
+        modelTextures[i] = createAndUploadGpuImage2D(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
+        freeImage(image);
         imageInfos[i].imageView = modelTextures[i].imageView;
         imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        memcpy(stagingBuffer.mappedData, image.data, image.faceSize);
-        freeImage(image);
-
-        VkBufferImageCopy copyRegion {};
-        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.imageSubresource.layerCount = 1;
-        copyRegion.imageExtent = modelTextures[i].imageExtent;
-        copyStagingBufferToImage(modelTextures[i].image, &copyRegion, 1, QueueFamily::Graphics);
     }
 
     VkWriteDescriptorSet writes[]
@@ -844,25 +833,7 @@ void loadSkybox(const char *scenePath)
             generateSkybox(hdriImagePaths[i], skyboxImagePath);
 
         Image image = loadImage(skyboxImagePath);
-        skyboxImages[i] = createGpuImage2DArray(image.format,
-            { image.width, image.height },
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            true);
-
-        VkBufferImageCopy copyRegions[6] {};
-        for (uint8_t j = 0; j < COUNTOF(copyRegions); j++)
-        {
-            copyRegions[j].bufferOffset = j * image.faceSize;
-            copyRegions[j].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copyRegions[j].imageSubresource.mipLevel = 0;
-            copyRegions[j].imageSubresource.baseArrayLayer = j;
-            copyRegions[j].imageSubresource.layerCount = 1;
-            copyRegions[j].imageExtent = skyboxImages[i].imageExtent;
-        }
-
-        memcpy(stagingBuffer.mappedData, image.data, image.faceCount * image.faceSize);
-        copyStagingBufferToImage(skyboxImages[i].image, copyRegions, COUNTOF(copyRegions), QueueFamily::Graphics);
+        skyboxImages[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
         freeImage(image);
         imageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     }
@@ -1290,7 +1261,10 @@ void draw()
 {
     ZoneScoped;
     if (resizeNeeded)
+    {
         recreateRenderTargets();
+        resizeNeeded = false;
+    }
 
     FrameData &frame = frames[frameIndex];
     {
@@ -1336,8 +1310,8 @@ void draw()
 
         ImageBarrier imageBarrier {};
         imageBarrier.image = swapchainImages[swapchainImageIndex];
-        imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // wait for acquire semaphore
-        imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
+        imageBarrier.srcStageMask = StageFlags::ColorAttachment; // wait for acquire semaphore
+        imageBarrier.dstStageMask = StageFlags::ColorAttachment;
         imageBarrier.srcAccessMask = AccessFlags::None;
         imageBarrier.dstAccessMask = AccessFlags::Write;
         imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1350,8 +1324,8 @@ void draw()
         drawUI(cmd);
         vkCmdEndRenderingKHR(cmd);
 
-        imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
-        imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR; // make render semaphore wait
+        imageBarrier.srcStageMask = StageFlags::ColorAttachment;
+        imageBarrier.dstStageMask = StageFlags::ColorAttachment; // make render semaphore wait
         imageBarrier.srcAccessMask = AccessFlags::Write;
         imageBarrier.dstAccessMask = AccessFlags::None;
         imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
