@@ -18,7 +18,7 @@ layout(location = 0) in FsInBlock
 
 layout(location = 0) out vec4 outFragColor;
 
-layout(set = 1, binding = 0) uniform texture2D textures[MAX_TEXTURES];
+layout(set = 1, binding = 0) uniform texture2D textures[MAX_MODEL_TEXTURES];
 
 layout(push_constant) uniform ConstantBlock
 {

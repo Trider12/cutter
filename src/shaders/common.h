@@ -14,7 +14,7 @@
 #endif // __cplusplus
 
 #define MAX_LIGHTS 16
-#define MAX_TEXTURES 64
+#define MAX_MODEL_TEXTURES 64
 #define CONFIG_SHOW_WIREFRAME 1 << 0
 #define CONFIG_USE_NORMAL_MAP 1 << 1
 

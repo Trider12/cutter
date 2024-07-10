@@ -21,9 +21,9 @@
 #include "VkUtils.hpp"
 
 // skip importing if already exist
-#define SKIP_SCENE_REIMPORT 0
-#define SKIP_MATERIAL_REIMPORT 0
-#define SKIP_SKYBOX_REIMPORT 0
+#define SKIP_SCENE_REIMPORT 1
+#define SKIP_MATERIAL_REIMPORT 1
+#define SKIP_SKYBOX_REIMPORT 1
 
 GLFWwindow *window;
 
@@ -223,7 +223,7 @@ GpuBuffer modelBuffer;
 GpuBuffer skyboxBuffer;
 GpuBuffer globalUniformBuffer;
 
-GpuImage modelTextures[MAX_TEXTURES];
+GpuImage modelTextures[MAX_MODEL_TEXTURES];
 uint8_t modelTextureCount;
 GpuImage skyboxImages[COUNTOF(hdriImagePaths)];
 uint32_t selectedSkybox = 0;
@@ -461,7 +461,7 @@ void initDescriptors()
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 16},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_TEXTURES},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 + MAX_MODEL_TEXTURES},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 16},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1} // for imgui
     };
@@ -480,7 +480,7 @@ void initDescriptors()
         {7, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
 
-    VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
+    VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
     VkDescriptorSetLayoutBinding skyboxSetBindings[]
     {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT},
@@ -656,13 +656,6 @@ void prepareAssets()
     ZoneScoped;
     ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
-    initShaderCompiler();
-    for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
-    {
-        compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
-    }
-    terminateShaderCompiler();
-
     for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
     {
 #if SKIP_SCENE_REIMPORT
@@ -757,7 +750,7 @@ void loadModel(const char *sceneDirPath)
 
     ASSERT(model.imagePaths.size() < UINT8_MAX);
     modelTextureCount = (uint8_t)model.imagePaths.size();
-    VkDescriptorImageInfo imageInfos[MAX_TEXTURES] {};
+    VkDescriptorImageInfo imageInfos[MAX_MODEL_TEXTURES] {};
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
@@ -971,6 +964,19 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
     }
 }
 
+void compileShaders()
+{
+    ZoneScoped;
+    ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
+
+    initShaderCompiler();
+    for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
+    {
+        compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
+    }
+    terminateShaderCompiler();
+}
+
 void init()
 {
     ZoneScoped;
@@ -985,6 +991,7 @@ void init()
     glfwSetMouseButtonCallback(window, glfwMouseButtonCallback);
 
     initVulkan();
+    compileShaders();
     initGraphics();
     initRenderTargets();
     initDescriptors();
@@ -1267,18 +1274,9 @@ void draw()
     }
 
     FrameData &frame = frames[frameIndex];
-    {
-        ZoneScopedN("Wait for fences");
-        vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
-    }
-
+    vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
     uint32_t swapchainImageIndex;
-    VkResult result;
-
-    {
-        ZoneScopedN("Acquire image");
-        result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
-    }
+    VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
     {

@@ -15,7 +15,9 @@
 #define STBI_ONLY_HDR
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#define TRACY_VK_USE_SYMBOL_TABLE
 #include <tracy/Tracy.hpp>
+#include <tracy/TracyVulkan.hpp>
 
 #define MIPS_BLIT
 
@@ -23,6 +25,7 @@ extern VkPhysicalDeviceProperties physicalDeviceProperties;
 extern VkDevice device;
 extern VkDescriptorPool descriptorPool;
 extern VmaAllocator allocator;
+extern TracyVkCtx tracyContext;
 
 extern VkQueue graphicsQueue;
 extern VkQueue computeQueue;
@@ -32,22 +35,66 @@ extern VkCommandBuffer graphicsCmd;
 extern VkCommandPool computeCommandPool;
 extern VkCommandBuffer computeCmd;
 
+static VkPipelineLayout generateSkyboxPipelineLayout;
+static VkPipeline generateSkyboxPipeline;
+static VkDescriptorSetLayout generateSkyboxDescriptorSetLayout;
+static VkDescriptorSet generateSkyboxDescriptorSet;
 static VkSampler linearClampSampler;
-static const char *skyboxShaderPath;
-static const char *mipsShaderPath;
+static uint32_t generateSkyboxWorkGroupSize, generateSkyboxWorkGroupCount;
+static constexpr uint32_t skyboxSize = 2048;
 
 static constexpr float defaultCompressionQuality = 0.1f;
 static void *optionsBC5;
 static void *optionsBC6;
 static void *optionsBC7;
 
+static void pickBestWorkGroupSize2d(uint32_t workSize, uint32_t &workGroupSize, uint32_t &workGroupCount)
+{
+    workGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
+    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
+    workGroupCount = (workSize + workGroupSize - 1) / workGroupSize;
+
+    while (maxInvocations < workGroupSize * workGroupSize)
+    {
+        workGroupSize /= 2;
+        workGroupCount *= 2;
+    }
+}
+
 void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMipsShaderPath)
 {
-    skyboxShaderPath = generateSkyboxShaderPath;
-    mipsShaderPath = generateMipsShaderPath;
+    UNUSED(generateMipsShaderPath);
 
     VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
+
+    VkDescriptorSetLayoutBinding setBindings[]
+    {
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
+        {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
+    };
+
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings));
+    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &generateSkyboxDescriptorSetLayout));
+    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &generateSkyboxDescriptorSetLayout, 1);
+    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &generateSkyboxDescriptorSet));
+
+    pickBestWorkGroupSize2d(skyboxSize, generateSkyboxWorkGroupSize, generateSkyboxWorkGroupCount);
+    VkSpecializationMapEntry specEntries[]
+    {
+        {0, 0, sizeof(uint32_t)}
+    };
+    uint32_t specData[] { generateSkyboxWorkGroupSize };
+    VkSpecializationInfo specInfo { COUNTOF(specEntries), specEntries,  sizeof(specData), specData };
+    VkShaderModule generateSkyboxShader = createShaderModuleFromSpv(device, generateSkyboxShaderPath);
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, generateSkyboxShader, &specInfo);
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&generateSkyboxDescriptorSetLayout, 1);
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &generateSkyboxPipelineLayout));
+    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
+
+    vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
 
     CreateOptionsBC5(&optionsBC5);
     SetQualityBC5(optionsBC5, defaultCompressionQuality);
@@ -60,6 +107,9 @@ void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMi
 void terminateImageUtils()
 {
     vkDestroySampler(device, linearClampSampler, nullptr);
+    vkDestroyDescriptorSetLayout(device, generateSkyboxDescriptorSetLayout, nullptr);
+    vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
+    vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
 
     DestroyOptionsBC5(optionsBC5);
     DestroyOptionsBC5(optionsBC6);
@@ -546,41 +596,44 @@ static void generateMipsBlit(GpuImage &gpuImage, uint8_t levelCount, uint8_t lay
     int32_t mipHeight = gpuImage.imageExtent.height;
 
     beginOneTimeCmd(graphicsCmd, graphicsCommandPool);
-
-    for (uint8_t i = 1; i < levelCount; i++)
     {
-        imageBarriers[0].baseMipLevel = i - 1;
-        pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
+        TracyVkZone(tracyContext, graphicsCmd, "Mips Blit");
+        for (uint8_t i = 1; i < levelCount; i++)
+        {
+            imageBarriers[0].baseMipLevel = i - 1;
+            pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
 
-        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-        blit.srcSubresource.mipLevel = i - 1;
+            blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+            blit.srcSubresource.mipLevel = i - 1;
 
-        if (mipWidth > 1)
-            mipWidth >>= 1;
-        if (mipHeight > 1)
-            mipHeight >>= 1;
+            if (mipWidth > 1)
+                mipWidth >>= 1;
+            if (mipHeight > 1)
+                mipHeight >>= 1;
 
-        blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
-        blit.dstSubresource.mipLevel = i;
+            blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
+            blit.dstSubresource.mipLevel = i;
 
-        vkCmdBlitImage(graphicsCmd,
-            gpuImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            gpuImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit,
-            VK_FILTER_LINEAR);
+            vkCmdBlitImage(graphicsCmd,
+                gpuImage.image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                gpuImage.image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit,
+                VK_FILTER_LINEAR);
+        }
+
+        imageBarriers[0].baseMipLevel = levelCount - 1;
+        imageBarriers[1].image = gpuImage.image;
+        imageBarriers[1].srcStageMask = StageFlags::Blit;
+        imageBarriers[1].dstStageMask = StageFlags::None;
+        imageBarriers[1].srcAccessMask = AccessFlags::Write;
+        imageBarriers[1].dstAccessMask = AccessFlags::None;
+        imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 2);
     }
-
-    imageBarriers[0].baseMipLevel = levelCount - 1;
-    imageBarriers[1].image = gpuImage.image;
-    imageBarriers[1].srcStageMask = StageFlags::Blit;
-    imageBarriers[1].dstStageMask = StageFlags::None;
-    imageBarriers[1].srcAccessMask = AccessFlags::Write;
-    imageBarriers[1].dstAccessMask = AccessFlags::None;
-    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 2);
+    TracyVkCollect(tracyContext, graphicsCmd);
     endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
 }
 #else
@@ -761,48 +814,7 @@ void freeImage(Image &image)
 
 void generateSkybox(const char *hdriPath, const char *skyboxPath)
 {
-    static constexpr uint32_t skyboxSize = 2048;
     ZoneScoped;
-    VkDescriptorSetLayoutBinding setBindings[]
-    {
-        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
-    };
-    VkDescriptorSetLayout setLayout;
-    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings));
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &setLayout));
-    VkDescriptorSet set;
-    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &setLayout, 1);
-    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &set));
-
-    uint32_t workGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
-    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
-    uint32_t workGroupCount = (skyboxSize + workGroupSize - 1) / workGroupSize;
-
-    while (maxInvocations < workGroupSize * workGroupSize)
-    {
-        workGroupSize /= 2;
-        workGroupCount *= 2;
-    }
-
-    VkSpecializationMapEntry specEntries[]
-    {
-        {0, 0, sizeof(uint32_t)}
-    };
-    uint32_t specData[] { workGroupSize };
-    VkSpecializationInfo specInfo { COUNTOF(specEntries), specEntries,  sizeof(specData), specData };
-    VkShaderModule generateSkyboxShader = createShaderModuleFromSpv(device, skyboxShaderPath);
-    VkPipelineShaderStageCreateInfo shaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, generateSkyboxShader, &specInfo);
-
-    VkPipelineLayout generateSkyboxPipelineLayout;
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&setLayout, 1);
-    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &generateSkyboxPipelineLayout));
-
-    VkPipeline generateSkyboxPipeline;
-    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
-    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
-
     Image image = importImage(hdriPath, ImagePurpose::HDRI);
     GpuImage hdriGpuImage = createAndUploadGpuImage2D(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
     freeImage(image);
@@ -819,24 +831,28 @@ void generateSkybox(const char *hdriPath, const char *skyboxPath)
     };
     VkWriteDescriptorSet writes[2]
     {
-        initWriteDescriptorSetImage(set, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
-        initWriteDescriptorSetImage(set, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
+        initWriteDescriptorSetImage(generateSkyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
+        initWriteDescriptorSetImage(generateSkyboxDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
     };
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 
     beginOneTimeCmd(computeCmd, computeCommandPool);
-    ImageBarrier imageBarrier {};
-    imageBarrier.image = skyboxGpuImage.image;
-    imageBarrier.srcStageMask = StageFlags::None;
-    imageBarrier.dstStageMask = StageFlags::ComputeShader;
-    imageBarrier.srcAccessMask = AccessFlags::None;
-    imageBarrier.dstAccessMask = AccessFlags::Write;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
-    vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &set, 0, nullptr);
-    vkCmdDispatch(computeCmd, workGroupCount, workGroupCount, 1);
+    {
+        TracyVkZone(tracyContext, computeCmd, "Generate Skybox");
+        ImageBarrier imageBarrier {};
+        imageBarrier.image = skyboxGpuImage.image;
+        imageBarrier.srcStageMask = StageFlags::None;
+        imageBarrier.dstStageMask = StageFlags::ComputeShader;
+        imageBarrier.srcAccessMask = AccessFlags::None;
+        imageBarrier.dstAccessMask = AccessFlags::Write;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
+        vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
+        vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &generateSkyboxDescriptorSet, 0, nullptr);
+        vkCmdDispatch(computeCmd, generateSkyboxWorkGroupCount, generateSkyboxWorkGroupCount, 1);
+    }
+    TracyVkCollect(tracyContext, computeCmd);
     endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, WaitForFence::Yes);
 
     uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * 4 * sizeof(uint16_t);
@@ -862,14 +878,9 @@ void generateSkybox(const char *hdriPath, const char *skyboxPath)
     image.purpose = ImagePurpose::HDRI;
     image.data = new unsigned char[image.dataSize];
     memcpy(image.data, stagingBuffer.mappedData, image.dataSize);
-
     writeImage(image, skyboxPath, GenerateMips::Yes, Compress::Yes);
     delete[] image.data;
 
-    vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
-    vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
-    vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
-    vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
     destroyGpuImage(hdriGpuImage);
     destroyGpuImage(skyboxGpuImage);
 }
