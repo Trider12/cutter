@@ -11,7 +11,7 @@ VkFenceCreateInfo initFenceCreateInfo(VkFenceCreateFlags flags = 0);
 
 VkSemaphoreCreateInfo initSemaphoreCreateInfo();
 
-VkCommandPoolCreateInfo initCommandPoolCreateInfo(uint32_t queueFamilyIndex);
+VkCommandPoolCreateInfo initCommandPoolCreateInfo(uint32_t queueFamilyIndex, bool resetCommandBuffer);
 
 VkCommandBufferAllocateInfo initCommandBufferAllocateInfo(VkCommandPool commandPool, uint32_t count);
 
@@ -33,11 +33,15 @@ VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask,
 
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags);
 
+VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageSubresourceRange subresourceRange);
+
 VkSamplerCreateInfo initSamplerCreateInfo(VkFilter filter, VkSamplerAddressMode addressMode);
 
 VkDescriptorPoolCreateInfo initDescriptorPoolCreateInfo(uint32_t maxSets, const VkDescriptorPoolSize *poolSizes, uint32_t poolSizeCount, VkDescriptorPoolCreateFlags flags = 0);
 
-VkDescriptorSetLayoutCreateInfo initDescriptorSetLayoutCreateInfo(const VkDescriptorSetLayoutBinding *bindings, uint32_t bindingCount);
+VkDescriptorSetLayoutBindingFlagsCreateInfo initDescriptorSetLayoutBindingFlagsCreateInfo(const VkDescriptorBindingFlags *bindingFlags, uint32_t bindingCount);
+
+VkDescriptorSetLayoutCreateInfo initDescriptorSetLayoutCreateInfo(const VkDescriptorSetLayoutBinding *bindings, uint32_t bindingCount, const VkDescriptorSetLayoutBindingFlagsCreateInfo *flagsInfo = nullptr);
 
 VkDescriptorSetAllocateInfo initDescriptorSetAllocateInfo(VkDescriptorPool descriptorPool, const VkDescriptorSetLayout *setLayouts, uint32_t descriptorSetCount);
 

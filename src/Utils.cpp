@@ -16,7 +16,7 @@
 
 bool mkdir(const char *path, bool recursive)
 {
-    ASSERT(path && *path);
+    ASSERT(isValidString(path));
 
     if (!recursive)
     {
@@ -49,7 +49,7 @@ bool mkdir(const char *path, bool recursive)
 
 bool pathExists(const char *path)
 {
-    ASSERT(path);
+    ASSERT(isValidString(path));
 #ifdef _MSC_VER
     return !_access(path, 0);
 #else // assume UNIX
@@ -59,7 +59,7 @@ bool pathExists(const char *path)
 
 uint32_t readFile(const char *filename, uint8_t *buffer, uint32_t bufferSize)
 {
-    ASSERT(filename);
+    ASSERT(isValidString(filename));
     ASSERT(pathExists(filename));
     FILE *stream = fopen(filename, "rb");
     ASSERT(stream);
@@ -79,7 +79,7 @@ uint32_t readFile(const char *filename, uint8_t *buffer, uint32_t bufferSize)
 
 uint32_t writeFile(const char *filename, const void *data, uint32_t size)
 {
-    ASSERT(filename);
+    ASSERT(isValidString(filename));
     ASSERT(data);
     size_t dirnameLength;
     cwk_path_get_dirname(filename, &dirnameLength);

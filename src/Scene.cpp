@@ -43,20 +43,25 @@ static void importMaterials(const cgltf_data *data, Scene &scene, const char *sc
     for (cgltf_size i = 0; i < data->materials_count; i++)
     {
         MaterialData md;
-        md.colorTexIndex = (uint32_t)(i * 3 + 0);
-        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.colorTexIndex, textureFileExtension);
-        importImage(data->materials[i].pbr_metallic_roughness.base_color_texture.texture->image, imagePath, ImagePurpose::Color);
-        scene.imagePaths.push_back(imagePath);
+        memset(&md, 255, sizeof(md));
 
-        md.normalTexIndex = (uint32_t)(i * 3 + 1);
-        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.normalTexIndex, textureFileExtension);
-        importImage(data->materials[i].normal_texture.texture->image, imagePath, ImagePurpose::Normal);
-        scene.imagePaths.push_back(imagePath);
+        auto tryImportImage = [&](cgltf_texture_view &view, uint32_t &texIndex, ImagePurpose purpose)
+        {
+            if (view.texture)
+            {
+                texIndex = (uint32_t)scene.imagePaths.size();
+                snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", texIndex, textureFileExtension);
+                importImage(view.texture->image, imagePath, purpose);
+                scene.imagePaths.push_back(imagePath);
+            }
+        };
 
-        md.aoRoughMetalTexIndex = (uint32_t)(i * 3 + 2);
-        snprintf(imagePath + imagePathSize, sizeof(imagePath) - imagePathSize, "image%02u%s", md.aoRoughMetalTexIndex, textureFileExtension);
-        importImage(data->materials[i].pbr_metallic_roughness.metallic_roughness_texture.texture->image, imagePath, ImagePurpose::Shading);
-        scene.imagePaths.push_back(imagePath);
+        tryImportImage(data->materials[i].pbr_metallic_roughness.base_color_texture, md.colorTexIndex, ImagePurpose::Color);
+        tryImportImage(data->materials[i].normal_texture, md.normalTexIndex, ImagePurpose::Normal);
+        tryImportImage(data->materials[i].pbr_metallic_roughness.metallic_roughness_texture, md.aoRoughMetalTexIndex, ImagePurpose::Shading);
+
+        if (data->materials[i].occlusion_texture.texture != data->materials[i].pbr_metallic_roughness.metallic_roughness_texture.texture) // TODO: handle this
+            md.mask &= ~MATERIAL_HAS_AO_TEX;
 
         scene.materials.push_back(md);
     }
@@ -156,7 +161,7 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
         {
             if (node->mesh->primitives[i].material)
             {
-                material = material = node->mesh->primitives[i].material;
+                material = node->mesh->primitives[i].material;
                 break;
             }
         }

@@ -17,10 +17,11 @@ VkSemaphoreCreateInfo initSemaphoreCreateInfo()
     return semaphoreCreateInfo;
 }
 
-VkCommandPoolCreateInfo initCommandPoolCreateInfo(uint32_t queueFamilyIndex)
+VkCommandPoolCreateInfo initCommandPoolCreateInfo(uint32_t queueFamilyIndex, bool resetCommandBuffer)
 {
     VkCommandPoolCreateInfo commandPoolCreateInfo {};
     commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | (resetCommandBuffer ? VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT : 0);
     commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndex;
 
     return commandPoolCreateInfo;
@@ -134,12 +135,17 @@ VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask,
 
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags)
 {
+    return initImageViewCreateInfo(image, format, viewType, initImageSubresourceRange(aspectFlags));
+}
+
+VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageSubresourceRange subresourceRange)
+{
     VkImageViewCreateInfo imageViewCreateInfo {};
     imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     imageViewCreateInfo.viewType = viewType;
     imageViewCreateInfo.image = image;
     imageViewCreateInfo.format = format;
-    imageViewCreateInfo.subresourceRange = initImageSubresourceRange(aspectFlags);
+    imageViewCreateInfo.subresourceRange = subresourceRange;
 
     return imageViewCreateInfo;
 }
@@ -171,10 +177,21 @@ VkDescriptorPoolCreateInfo initDescriptorPoolCreateInfo(uint32_t maxSets, const 
     return descriptorPoolCreateInfo;
 }
 
-VkDescriptorSetLayoutCreateInfo initDescriptorSetLayoutCreateInfo(const VkDescriptorSetLayoutBinding *bindings, uint32_t bindingCount)
+VkDescriptorSetLayoutBindingFlagsCreateInfo initDescriptorSetLayoutBindingFlagsCreateInfo(const VkDescriptorBindingFlags *bindingFlags, uint32_t bindingCount)
+{
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo {};
+    flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flagsInfo.bindingCount = bindingCount;
+    flagsInfo.pBindingFlags = bindingFlags;
+
+    return flagsInfo;
+}
+
+VkDescriptorSetLayoutCreateInfo initDescriptorSetLayoutCreateInfo(const VkDescriptorSetLayoutBinding *bindings, uint32_t bindingCount, const VkDescriptorSetLayoutBindingFlagsCreateInfo *flagsInfo)
 {
     VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo {};
     descriptorSetLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    descriptorSetLayoutCreateInfo.pNext = flagsInfo;
     descriptorSetLayoutCreateInfo.bindingCount = bindingCount;
     descriptorSetLayoutCreateInfo.pBindings = bindings;
 

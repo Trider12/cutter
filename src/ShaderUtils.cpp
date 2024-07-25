@@ -51,7 +51,6 @@ void initShaderCompiler()
     compiler = shaderc_compiler_initialize();
     options = shaderc_compile_options_initialize();
     shaderc_compile_options_set_source_language(options, shaderc_source_language_glsl);
-    shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_performance);
     shaderc_compile_options_set_forced_version_profile(options, 450, shaderc_profile_none);
     shaderc_compile_options_set_include_callbacks(options, shadercIncludeResolve, shadercIncludeResultRelease, nullptr);
     shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
@@ -59,6 +58,9 @@ void initShaderCompiler()
     shaderc_compile_options_set_warnings_as_errors(options);
 #ifdef DEBUG
     shaderc_compile_options_set_generate_debug_info(options);
+    shaderc_compile_options_add_macro_definition(options, "DEBUG", 5, nullptr, 0);
+#else
+    shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_performance);
 #endif // DEBUG
 }
 

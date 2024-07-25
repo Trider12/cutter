@@ -1,0 +1,62 @@
+#include "utils.h"
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x_id = 0, local_size_y_id = 0) in;
+
+layout(set = 0, binding = 2) uniform textureCube skyboxTexture;
+layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly imageCube irradianceMapImage;
+layout(set = 0, binding = 6) uniform sampler linearClampSampler;
+
+vec4 computeIrradiance(vec3 pos)
+{
+    // filtered importance sampling using a cosine PDF
+    const uint sampleCount = 256;
+    const float sampleCountRcp = 1.f / sampleCount;
+    const ivec2 skyboxSize = textureSize(skyboxTexture, 0);
+    const float omegaTexel = 4.f / (6.f * skyboxSize.x * skyboxSize.y); // skip multiplying by PI
+    const float mipBias = 1.f;
+
+    vec3 N = normalize(pos);
+    vec3 T = normalize(cross(abs(N.z) < 0.999f ? vec3(0.f, 0.f, 1.f) : vec3(1.f, 0.f, 0.f), N));
+    vec3 B = normalize(cross(N, T));
+    vec3 irradiance = vec3(0.f);
+
+    for(uint i = 0; i < sampleCount; i++)
+    {
+        vec2 h2d = hammersley2d(i, sampleCount);
+        float sinTheta = sqrt(h2d.x);
+        float cosTheta = sqrt(1.f - h2d.x);
+        float phi = h2d.y * TWO_PI;
+        vec3 tangentSampleVec = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+        vec3 sampleVec = tangentSampleVec.x * T + tangentSampleVec.y * B + tangentSampleVec.z * N;
+
+        float pdfRcp = 1.f / cosTheta; // skip multiplying by PI
+        float omegaSample = sampleCountRcp * pdfRcp;
+        float mipLevel = max(0.5f * log2(omegaSample / omegaTexel) + mipBias, 0.f);
+
+        irradiance += textureLod(samplerCube(skyboxTexture, linearClampSampler), sampleVec, mipLevel).rgb;
+    }
+
+    return vec4(irradiance / float(sampleCount), 1.f);
+}
+
+void main()
+{
+    uint faceSize = imageSize(irradianceMapImage).x;
+    uint faceIndex = gl_GlobalInvocationID.x / faceSize;
+    uvec2 texelCoords = uvec2(gl_GlobalInvocationID.x % faceSize, gl_GlobalInvocationID.y);
+
+    if(faceIndex > 5 || texelCoords.y >= faceSize)
+        return;
+
+    vec2 pos = (2.f * texelCoords + 1.f) / faceSize - 1.f;
+    vec3 positions[6] = vec3[6](
+        vec3(1.f, -pos.y, -pos.x),
+        vec3(-1.f, -pos.y, pos.x),
+        vec3(pos.x, 1.f, pos.y),
+        vec3(pos.x, -1.f, -pos.y),
+        vec3(pos.x, -pos.y, 1.f),
+        vec3(-pos.x, -pos.y, -1.f)
+    );
+    imageStore(irradianceMapImage, ivec3(texelCoords, faceIndex), computeIrradiance(positions[faceIndex]));
+}

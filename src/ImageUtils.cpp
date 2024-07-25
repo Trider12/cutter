@@ -5,6 +5,7 @@
 #include "ShaderUtils.hpp"
 #include "Utils.hpp"
 #include "VkUtils.hpp"
+#include "../src/shaders/common.h"
 
 #include <cmp_core.h>
 #define KHRONOS_STATIC
@@ -29,19 +30,28 @@ extern TracyVkCtx tracyContext;
 
 extern VkQueue graphicsQueue;
 extern VkQueue computeQueue;
-
 extern VkCommandPool graphicsCommandPool;
-extern VkCommandBuffer graphicsCmd;
 extern VkCommandPool computeCommandPool;
-extern VkCommandBuffer computeCmd;
 
-static VkPipelineLayout generateSkyboxPipelineLayout;
-static VkPipeline generateSkyboxPipeline;
-static VkDescriptorSetLayout generateSkyboxDescriptorSetLayout;
-static VkDescriptorSet generateSkyboxDescriptorSet;
+static VkPipelineLayout commonPipelineLayout;
+static VkPipeline computeSkyboxPipeline;
+static VkPipeline computeBrdfLutPipeline;
+static VkPipeline computeIrradianceMapPipeline;
+static VkPipeline computePrefilteredMapPipeline;
+static VkDescriptorSetLayout commonDescriptorSetLayout;
+static VkDescriptorSet commonDescriptorSet;
 static VkSampler linearClampSampler;
-static uint32_t generateSkyboxWorkGroupSize, generateSkyboxWorkGroupCount;
-static constexpr uint32_t skyboxSize = 2048;
+
+static constexpr uint16_t skyboxFaceSize = 2048;
+static constexpr uint16_t brdfLutSize = 512;
+static constexpr uint16_t irradianceMapFaceSize = 32;
+static constexpr uint16_t prefilteredMapFaceSize = 256;
+static constexpr uint32_t prefilteredMapLevelCount = MAX_PREFILTERED_MAP_LOD + 1;
+
+static uint32_t computeSkyboxWorkGroupSize, computeSkyboxWorkGroupCount;
+static uint32_t computeBrdfLutWorkGroupSize, computeBrdfLutWorkGroupCount;
+static uint32_t computeIrradianceMapWorkGroupSize, computeIrradianceMapWorkGroupCount;
+static uint32_t computePrefilteredMapWorkGroupSize, computePrefilteredMapWorkGroupCount;
 
 static constexpr float defaultCompressionQuality = 0.1f;
 static void *optionsBC5;
@@ -50,51 +60,107 @@ static void *optionsBC7;
 
 static void pickBestWorkGroupSize2d(uint32_t workSize, uint32_t &workGroupSize, uint32_t &workGroupCount)
 {
-    workGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
-    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
-    workGroupCount = (workSize + workGroupSize - 1) / workGroupSize;
+    static uint32_t maxWorkGroupSize = 0;
 
-    while (maxInvocations < workGroupSize * workGroupSize)
+    if (!maxWorkGroupSize)
     {
-        workGroupSize /= 2;
-        workGroupCount *= 2;
+        maxWorkGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
+        uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
+
+        while (maxInvocations < maxWorkGroupSize * maxWorkGroupSize)
+        {
+            maxWorkGroupSize /= 2;
+        }
     }
+
+    workGroupSize = min(workSize, maxWorkGroupSize);
+    workGroupCount = (workSize + workGroupSize - 1) / workGroupSize;
 }
 
-void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMipsShaderPath)
+static inline uint8_t calcMipLevelCount(uint16_t width, uint16_t height)
 {
-    UNUSED(generateMipsShaderPath);
+    return (uint8_t)(log2f((float)max(width, height))) + 1;
+}
+
+void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdfLutShaderPath, const char *computeIrradianceMapShaderPath, const char *computePrefilteredMapShaderPath)
+{
+    ASSERT(isValidString(computeSkyboxShaderPath));
+    ASSERT(isValidString(computeIrradianceMapShaderPath));
+    ASSERT(isValidString(computePrefilteredMapShaderPath));
+    ASSERT(calcMipLevelCount(prefilteredMapFaceSize, prefilteredMapFaceSize) >= prefilteredMapLevelCount);
+
+    pickBestWorkGroupSize2d(skyboxFaceSize, computeSkyboxWorkGroupSize, computeSkyboxWorkGroupCount);
+    pickBestWorkGroupSize2d(brdfLutSize, computeBrdfLutWorkGroupSize, computeBrdfLutWorkGroupCount);
+    pickBestWorkGroupSize2d(irradianceMapFaceSize, computeIrradianceMapWorkGroupSize, computeIrradianceMapWorkGroupCount);
+    pickBestWorkGroupSize2d(prefilteredMapFaceSize, computePrefilteredMapWorkGroupSize, computePrefilteredMapWorkGroupCount);
 
     VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
 
     VkDescriptorSetLayoutBinding setBindings[]
     {
-        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // hdri equirect
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // skybox write
+        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // skybox read
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // brdf lut
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // irradiance
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, prefilteredMapLevelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // prefiltered
+        {6, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
     };
+    VkDescriptorBindingFlags bindingFlags[COUNTOF(setBindings)] {};
+    bindingFlags[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo = initDescriptorSetLayoutBindingFlagsCreateInfo(bindingFlags, COUNTOF(bindingFlags));
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings), &flagsInfo);
+    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &commonDescriptorSetLayout));
+    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &commonDescriptorSetLayout, 1);
+    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &commonDescriptorSet));
 
-    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings));
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &generateSkyboxDescriptorSetLayout));
-    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &generateSkyboxDescriptorSetLayout, 1);
-    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &generateSkyboxDescriptorSet));
+    VkPushConstantRange range {};
+    range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    range.size = sizeof(uint32_t);
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&commonDescriptorSetLayout, 1, &range, 1);
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &commonPipelineLayout));
 
-    pickBestWorkGroupSize2d(skyboxSize, generateSkyboxWorkGroupSize, generateSkyboxWorkGroupCount);
-    VkSpecializationMapEntry specEntries[]
+    VkSpecializationMapEntry specEntry { 0, 0, sizeof(uint32_t) };
+    VkSpecializationInfo specInfos[]
     {
-        {0, 0, sizeof(uint32_t)}
+        { 1, &specEntry, sizeof(uint32_t), &computeSkyboxWorkGroupSize },
+        { 1, &specEntry, sizeof(uint32_t), &computeBrdfLutWorkGroupSize },
+        { 1, &specEntry, sizeof(uint32_t), &computeIrradianceMapWorkGroupSize },
+        { 1, &specEntry, sizeof(uint32_t), &computePrefilteredMapWorkGroupSize },
     };
-    uint32_t specData[] { generateSkyboxWorkGroupSize };
-    VkSpecializationInfo specInfo { COUNTOF(specEntries), specEntries,  sizeof(specData), specData };
-    VkShaderModule generateSkyboxShader = createShaderModuleFromSpv(device, generateSkyboxShaderPath);
-    VkPipelineShaderStageCreateInfo shaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, generateSkyboxShader, &specInfo);
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&generateSkyboxDescriptorSetLayout, 1);
-    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &generateSkyboxPipelineLayout));
-    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(shaderStageCreateInfo, generateSkyboxPipelineLayout);
-    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &generateSkyboxPipeline));
+    VkShaderModule shaderModules[]
+    {
+        createShaderModuleFromSpv(device, computeSkyboxShaderPath),
+        createShaderModuleFromSpv(device, computeBrdfLutShaderPath),
+        createShaderModuleFromSpv(device, computeIrradianceMapShaderPath),
+        createShaderModuleFromSpv(device, computePrefilteredMapShaderPath)
+    };
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfos[]
+    {
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[0], &specInfos[0]),
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[1], &specInfos[1]),
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[2], &specInfos[2]),
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[3], &specInfos[3])
+    };
+    VkComputePipelineCreateInfo computePipelineCreateInfos[]
+    {
+        initComputePipelineCreateInfo(shaderStageCreateInfos[0], commonPipelineLayout),
+        initComputePipelineCreateInfo(shaderStageCreateInfos[1], commonPipelineLayout),
+        initComputePipelineCreateInfo(shaderStageCreateInfos[2], commonPipelineLayout),
+        initComputePipelineCreateInfo(shaderStageCreateInfos[3], commonPipelineLayout)
+    };
+    VkPipeline pipelines[COUNTOF(computePipelineCreateInfos)];
+    vkVerify(vkCreateComputePipelines(device, nullptr, COUNTOF(computePipelineCreateInfos), computePipelineCreateInfos, nullptr, pipelines));
+    computeSkyboxPipeline = pipelines[0];
+    computeBrdfLutPipeline = pipelines[1];
+    computeIrradianceMapPipeline = pipelines[2];
+    computePrefilteredMapPipeline = pipelines[3];
 
-    vkDestroyShaderModule(device, generateSkyboxShader, nullptr);
+    for (uint8_t i = 0; i < COUNTOF(shaderModules); i++)
+    {
+        vkDestroyShaderModule(device, shaderModules[i], nullptr);
+    }
 
     CreateOptionsBC5(&optionsBC5);
     SetQualityBC5(optionsBC5, defaultCompressionQuality);
@@ -107,9 +173,12 @@ void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMi
 void terminateImageUtils()
 {
     vkDestroySampler(device, linearClampSampler, nullptr);
-    vkDestroyDescriptorSetLayout(device, generateSkyboxDescriptorSetLayout, nullptr);
-    vkDestroyPipelineLayout(device, generateSkyboxPipelineLayout, nullptr);
-    vkDestroyPipeline(device, generateSkyboxPipeline, nullptr);
+    vkDestroyDescriptorSetLayout(device, commonDescriptorSetLayout, nullptr);
+    vkDestroyPipelineLayout(device, commonPipelineLayout, nullptr);
+    vkDestroyPipeline(device, computeSkyboxPipeline, nullptr);
+    vkDestroyPipeline(device, computeBrdfLutPipeline, nullptr);
+    vkDestroyPipeline(device, computeIrradianceMapPipeline, nullptr);
+    vkDestroyPipeline(device, computePrefilteredMapPipeline, nullptr);
 
     DestroyOptionsBC5(optionsBC5);
     DestroyOptionsBC5(optionsBC6);
@@ -162,7 +231,7 @@ Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
 Image importImage(const char *inImageFilename, ImagePurpose purpose)
 {
     ZoneScoped;
-    ASSERT(inImageFilename && *inImageFilename);
+    ASSERT(isValidString(inImageFilename));
     ZoneText(inImageFilename, strlen(inImageFilename));
     uint32_t dataSize = readFile(inImageFilename, nullptr, 0);
     uint8_t *data = new uint8_t[dataSize];
@@ -570,7 +639,7 @@ uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, vo
 }
 
 #ifdef MIPS_BLIT
-static void generateMipsBlit(GpuImage &gpuImage, uint8_t levelCount, uint8_t layerCount)
+static void generateMipsBlit(Cmd cmd, GpuImage &gpuImage)
 {
     ImageBarrier imageBarriers[2] {};
     imageBarriers[0].image = gpuImage.image;
@@ -582,62 +651,56 @@ static void generateMipsBlit(GpuImage &gpuImage, uint8_t levelCount, uint8_t lay
     imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     imageBarriers[0].levelCount = 1;
     imageBarriers[0].baseArrayLayer = 0;
-    imageBarriers[0].layerCount = layerCount;
+    imageBarriers[0].layerCount = gpuImage.layerCount;
 
     VkImageBlit blit {};
     blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     blit.srcSubresource.baseArrayLayer = 0;
-    blit.srcSubresource.layerCount = layerCount;
+    blit.srcSubresource.layerCount = gpuImage.layerCount;
     blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     blit.dstSubresource.baseArrayLayer = 0;
-    blit.dstSubresource.layerCount = layerCount;
+    blit.dstSubresource.layerCount = gpuImage.layerCount;
 
     int32_t mipWidth = gpuImage.imageExtent.width;
     int32_t mipHeight = gpuImage.imageExtent.height;
 
-    beginOneTimeCmd(graphicsCmd, graphicsCommandPool);
+    for (uint8_t i = 1; i < gpuImage.levelCount; i++)
     {
-        TracyVkZone(tracyContext, graphicsCmd, "Mips Blit");
-        for (uint8_t i = 1; i < levelCount; i++)
-        {
-            imageBarriers[0].baseMipLevel = i - 1;
-            pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
+        imageBarriers[0].baseMipLevel = i - 1;
+        pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
 
-            blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-            blit.srcSubresource.mipLevel = i - 1;
+        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.srcSubresource.mipLevel = i - 1;
 
-            if (mipWidth > 1)
-                mipWidth >>= 1;
-            if (mipHeight > 1)
-                mipHeight >>= 1;
+        if (mipWidth > 1)
+            mipWidth >>= 1;
+        if (mipHeight > 1)
+            mipHeight >>= 1;
 
-            blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
-            blit.dstSubresource.mipLevel = i;
+        blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.dstSubresource.mipLevel = i;
 
-            vkCmdBlitImage(graphicsCmd,
-                gpuImage.image,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                gpuImage.image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &blit,
-                VK_FILTER_LINEAR);
-        }
-
-        imageBarriers[0].baseMipLevel = levelCount - 1;
-        imageBarriers[1].image = gpuImage.image;
-        imageBarriers[1].srcStageMask = StageFlags::Blit;
-        imageBarriers[1].dstStageMask = StageFlags::None;
-        imageBarriers[1].srcAccessMask = AccessFlags::Write;
-        imageBarriers[1].dstAccessMask = AccessFlags::None;
-        imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 2);
+        vkCmdBlitImage(cmd.commandBuffer,
+            gpuImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            gpuImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit,
+            VK_FILTER_LINEAR);
     }
-    TracyVkCollect(tracyContext, graphicsCmd);
-    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
+
+    imageBarriers[0].baseMipLevel = gpuImage.levelCount - 1;
+    imageBarriers[1].image = gpuImage.image;
+    imageBarriers[1].srcStageMask = StageFlags::Blit;
+    imageBarriers[1].dstStageMask = StageFlags::None;
+    imageBarriers[1].srcAccessMask = AccessFlags::Write;
+    imageBarriers[1].dstAccessMask = AccessFlags::None;
+    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
 }
 #else
-static void generateMipsCompute(GpuImage &gpuImage, uint32_t levelCount, uint8_t layerCount)
+static void generateMipsCompute(GpuImage &gpuImage)
 {
     static_assert(false, ""); // TODO
 }
@@ -654,7 +717,7 @@ static void generateImageMips(Image &image)
         image.format == VK_FORMAT_R8G8B8A8_UNORM ||
         image.format == VK_FORMAT_R16G16B16A16_SFLOAT);
 
-    image.levelCount = (uint8_t)(log2f((float)max(image.width, image.height))) + 1;
+    image.levelCount = calcMipLevelCount(image.width, image.height);
 
     VkImageUsageFlags usageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     QueueFamily queueFamily;
@@ -671,57 +734,36 @@ static void generateImageMips(Image &image)
     GpuImage gpuImage;
 
     if (image.faceCount == 1)
-        gpuImage = createGpuImage2D(image.format, { image.width, image.height }, image.levelCount, usageFlags);
+        gpuImage = createAndUploadGpuImage2D(image, queueFamily, usageFlags, imageLayout);
     else
-        gpuImage = createGpuImage2DArray(image.format, { image.width, image.height }, image.levelCount, usageFlags, Cubemap::No);
-
-    memcpy(stagingBuffer.mappedData, image.data, image.dataSize);
-    VkBufferImageCopy copyRegion {};
-    copyRegion.imageExtent = gpuImage.imageExtent;
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.layerCount = image.faceCount;
-    copyStagingBufferToImage(gpuImage.image, &copyRegion, 1, queueFamily, imageLayout);
+        gpuImage = createAndUploadGpuImage2DArray(image, queueFamily, usageFlags, Cubemap::No, imageLayout);
 
 #ifdef MIPS_BLIT
-    generateMipsBlit(gpuImage, image.levelCount, image.faceCount);
+    Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
+    beginOneTimeCmd(graphicsCmd);
+    {
+        TracyVkZone(tracyContext, graphicsCmd.commandBuffer, "Mips Blit");
+        generateMipsBlit(graphicsCmd, gpuImage);
+    }
+    TracyVkCollect(tracyContext, graphicsCmd.commandBuffer);
+    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
+    freeCmd(graphicsCmd);
 #else
-    generateMipsCompute(gpuImage, image.levelCount, image.faceCount);
+    generateMipsCompute(gpuImage);
 #endif
 
-    uint8_t copyRegionsCount = image.faceCount * image.levelCount;
-    VkBufferImageCopy *copyRegions = (VkBufferImageCopy *)alloca(copyRegionsCount * sizeof(VkBufferImageCopy));
-    memset(copyRegions, 0, copyRegionsCount * sizeof(VkBufferImageCopy));
-
-    image.dataSize = iterateImageLevelFaces(image, [](const Image &image, uint8_t level, uint8_t face, uint16_t mipWidth, uint16_t mipHeight, uint32_t dataOffset, uint32_t dataSize, void *userData)
-    {
-        UNUSED(dataSize);
-        VkBufferImageCopy *copyRegions = (VkBufferImageCopy *)userData;
-        uint8_t index = level * image.faceCount + face;
-        copyRegions[index].bufferOffset = dataOffset;
-        copyRegions[index].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegions[index].imageSubresource.mipLevel = level;
-        copyRegions[index].imageSubresource.baseArrayLayer = face;
-        copyRegions[index].imageSubresource.layerCount = 1;
-        copyRegions[index].imageExtent = { mipWidth, mipHeight, 1 };
-    }, copyRegions);
-
-    copyImageToStagingBuffer(gpuImage.image, copyRegions, copyRegionsCount, queueFamily);
+    copyImage(gpuImage, image, queueFamily);
     destroyGpuImage(gpuImage);
-
-    delete[] image.data;
-    image.data = new uint8_t[image.dataSize];
-    memcpy(image.data, stagingBuffer.mappedData, image.dataSize);
 }
 
 void writeImage(Image &image, const char *outImageFilename, GenerateMips generateMips, Compress compress)
 {
     ZoneScoped;
-    ASSERT(outImageFilename && *outImageFilename);
+    ASSERT(isValidString(outImageFilename));
     ZoneText(outImageFilename, strlen(outImageFilename));
     ASSERT(image.faceCount == 1 || image.faceCount == 6);
-    ASSERT(image.levelCount == 1);
 
-    if (generateMips == GenerateMips::Yes)
+    if (generateMips == GenerateMips::Yes && image.levelCount == 1)
         generateImageMips(image);
 
     Image compressedImage = {};
@@ -765,7 +807,7 @@ void writeImage(Image &image, const char *outImageFilename, GenerateMips generat
 Image loadImage(const char *inImageFilename)
 {
     ZoneScoped;
-    ASSERT(inImageFilename && *inImageFilename);
+    ASSERT(isValidString(inImageFilename));
     ZoneText(inImageFilename, strlen(inImageFilename));
     ktxTexture2 *texture;
     VERIFY(ktxTexture2_CreateFromNamedFile(inImageFilename, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &texture) == KTX_SUCCESS);
@@ -797,8 +839,8 @@ Image loadImage(const char *inImageFilename)
 void importImage(const char *inImageFilename, const char *outImageFilename, ImagePurpose purpose)
 {
     ZoneScoped;
-    ASSERT(inImageFilename && *inImageFilename);
-    ASSERT(outImageFilename && *outImageFilename);
+    ASSERT(isValidString(inImageFilename));
+    ASSERT(isValidString(outImageFilename));
     ZoneText(inImageFilename, strlen(inImageFilename));
     ZoneText(outImageFilename, strlen(outImageFilename));
     Image image = importImage(inImageFilename, purpose);
@@ -812,35 +854,24 @@ void freeImage(Image &image)
     image = {};
 }
 
-void generateSkybox(const char *hdriPath, const char *skyboxPath)
+void computeBrdfLut(const char *brdfLutPath)
 {
-    ZoneScoped;
-    Image image = importImage(hdriPath, ImagePurpose::HDRI);
-    GpuImage hdriGpuImage = createAndUploadGpuImage2D(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
-    freeImage(image);
+    ASSERT(isValidString(brdfLutPath));
 
-    GpuImage skyboxGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
-        { skyboxSize, skyboxSize }, 1,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        Cubemap::No);
+    GpuImage brdfLutGpuImage = createGpuImage2D(VK_FORMAT_R16G16B16A16_SFLOAT,
+        { brdfLutSize, brdfLutSize }, 1,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 
-    VkDescriptorImageInfo imageInfos[2]
-    {
-        { nullptr, hdriGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL }
-    };
-    VkWriteDescriptorSet writes[2]
-    {
-        initWriteDescriptorSetImage(generateSkyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
-        initWriteDescriptorSetImage(generateSkyboxDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1)
-    };
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+    VkDescriptorImageInfo imageInfo { nullptr, brdfLutGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 3, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
-    beginOneTimeCmd(computeCmd, computeCommandPool);
+    Cmd computeCmd = allocateCmd(computeCommandPool);
+    beginOneTimeCmd(computeCmd);
     {
-        TracyVkZone(tracyContext, computeCmd, "Generate Skybox");
+        TracyVkZone(tracyContext, computeCmd.commandBuffer, "Compute BRDF LUT");
         ImageBarrier imageBarrier {};
-        imageBarrier.image = skyboxGpuImage.image;
+        imageBarrier.image = brdfLutGpuImage.image;
         imageBarrier.srcStageMask = StageFlags::None;
         imageBarrier.dstStageMask = StageFlags::ComputeShader;
         imageBarrier.srcAccessMask = AccessFlags::None;
@@ -848,39 +879,186 @@ void generateSkybox(const char *hdriPath, const char *skyboxPath)
         imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
-        vkCmdBindPipeline(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipeline);
-        vkCmdBindDescriptorSets(computeCmd, VK_PIPELINE_BIND_POINT_COMPUTE, generateSkyboxPipelineLayout, 0, 1, &generateSkyboxDescriptorSet, 0, nullptr);
-        vkCmdDispatch(computeCmd, generateSkyboxWorkGroupCount, generateSkyboxWorkGroupCount, 1);
+        vkCmdBindDescriptorSets(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
+        vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeBrdfLutPipeline);
+        vkCmdDispatch(computeCmd.commandBuffer, computeBrdfLutWorkGroupCount, computeBrdfLutWorkGroupCount, 1);
     }
-    TracyVkCollect(tracyContext, computeCmd);
+    TracyVkCollect(tracyContext, computeCmd.commandBuffer);
     endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, WaitForFence::Yes);
+    freeCmd(computeCmd);
 
-    uint32_t skyboxImageLayerSize = skyboxSize * skyboxSize * 4 * sizeof(uint16_t);
-    VkBufferImageCopy copyRegions[6] {};
-    for (uint8_t i = 0; i < COUNTOF(copyRegions); i++)
-    {
-        copyRegions[i].bufferOffset = i * skyboxImageLayerSize;
-        copyRegions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegions[i].imageSubresource.mipLevel = 0;
-        copyRegions[i].imageSubresource.baseArrayLayer = i;
-        copyRegions[i].imageSubresource.layerCount = 1;
-        copyRegions[i].imageExtent = { skyboxSize, skyboxSize, 1 };
-    }
-    copyImageToStagingBuffer(skyboxGpuImage.image, copyRegions, COUNTOF(copyRegions), QueueFamily::Compute);
-
-    image = {};
-    image.dataSize = skyboxImageLayerSize * 6;
-    image.faceCount = 6;
-    image.levelCount = 1;
-    image.width = skyboxSize;
-    image.height = skyboxSize;
-    image.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    Image image {};
     image.purpose = ImagePurpose::HDRI;
-    image.data = new unsigned char[image.dataSize];
-    memcpy(image.data, stagingBuffer.mappedData, image.dataSize);
-    writeImage(image, skyboxPath, GenerateMips::Yes, Compress::Yes);
-    delete[] image.data;
+    copyImage(brdfLutGpuImage, image, QueueFamily::Compute);
+    writeImage(image, brdfLutPath, GenerateMips::No, Compress::Yes);
+    freeImage(image);
+
+    destroyGpuImage(brdfLutGpuImage);
+}
+
+void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *irradianceMapPath, const char *prefilteredMapPath)
+{
+    ZoneScoped;
+    ASSERT(isValidString(hdriPath));
+    ASSERT(isValidString(skyboxPath));
+    ASSERT(isValidString(irradianceMapPath));
+    ASSERT(isValidString(prefilteredMapPath));
+
+    Image image = importImage(hdriPath, ImagePurpose::HDRI);
+    GpuImage hdriGpuImage = createAndUploadGpuImage2D(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
+    freeImage(image);
+
+    uint8_t skyboxLevelCount = calcMipLevelCount(skyboxFaceSize, skyboxFaceSize);
+    GpuImage skyboxGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+        { skyboxFaceSize, skyboxFaceSize }, skyboxLevelCount,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        Cubemap::Yes);
+    GpuImage irradianceMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+        { irradianceMapFaceSize, irradianceMapFaceSize }, 1,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        Cubemap::Yes);
+    GpuImage prefilteredMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+        { prefilteredMapFaceSize, prefilteredMapFaceSize }, prefilteredMapLevelCount,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        Cubemap::Yes);
+
+    VkDescriptorImageInfo imageInfos[4 + prefilteredMapLevelCount]
+    {
+        { nullptr, hdriGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL },
+        { nullptr, skyboxGpuImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { nullptr, irradianceMapGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL }
+    };
+
+    VkImageView imageViews[prefilteredMapLevelCount];
+
+    for (uint8_t i = 0; i < prefilteredMapLevelCount; i++)
+    {
+        VkImageSubresourceRange range = initImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, i, 1);
+        VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(prefilteredMapGpuImage.image, prefilteredMapGpuImage.imageFormat, VK_IMAGE_VIEW_TYPE_CUBE, range);
+        vkVerify(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageViews[i]));
+
+        imageInfos[4 + i] = { nullptr, imageViews[i], VK_IMAGE_LAYOUT_GENERAL };
+    }
+
+    VkWriteDescriptorSet writes[]
+    {
+        initWriteDescriptorSetImage(commonDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
+        initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1),
+        initWriteDescriptorSetImage(commonDescriptorSet, 2, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 2),
+        initWriteDescriptorSetImage(commonDescriptorSet, 4, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 3),
+        initWriteDescriptorSetImage(commonDescriptorSet, 5, prefilteredMapLevelCount, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 4)
+    };
+    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+
+    VkSemaphore semaphore;
+    VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
+    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
+    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    ImageBarrier imageBarriers[3] {};
+
+    Cmd computeCmd1 = allocateCmd(computeCommandPool);
+    beginOneTimeCmd(computeCmd1);
+    {
+        TracyVkZone(tracyContext, computeCmd1.commandBuffer, "Compute skybox");
+        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].srcStageMask = StageFlags::None;
+        imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
+        imageBarriers[0].srcAccessMask = AccessFlags::None;
+        imageBarriers[0].dstAccessMask = AccessFlags::Write;
+        imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imageBarriers[1] = imageBarriers[0];
+        imageBarriers[1].image = irradianceMapGpuImage.image;
+        imageBarriers[2] = imageBarriers[0];
+        imageBarriers[2].image = prefilteredMapGpuImage.image;
+        pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 2);
+        vkCmdBindDescriptorSets(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
+        vkCmdBindPipeline(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeSkyboxPipeline);
+        vkCmdDispatch(computeCmd1.commandBuffer, computeSkyboxWorkGroupCount, computeSkyboxWorkGroupCount, 1);
+        imageBarriers[0] = {};
+        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].srcStageMask = StageFlags::ComputeShader;
+        imageBarriers[0].srcAccessMask = AccessFlags::Write;
+        imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imageBarriers[0].srcQueueFamily = QueueFamily::Compute;
+        imageBarriers[0].dstQueueFamily = QueueFamily::Graphics;
+        pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 1);
+    }
+    TracyVkCollect(tracyContext, computeCmd1.commandBuffer);
+    endAndSubmitOneTimeCmd(computeCmd1, computeQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
+
+    Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
+    beginOneTimeCmd(graphicsCmd);
+    {
+        TracyVkZone(tracyContext, graphicsCmd.commandBuffer, "Mips blit");
+        imageBarriers[0] = {};
+        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].dstStageMask = StageFlags::Blit;
+        imageBarriers[0].dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+        imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imageBarriers[0].srcQueueFamily = QueueFamily::Compute;
+        imageBarriers[0].dstQueueFamily = QueueFamily::Graphics;
+        pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
+        generateMipsBlit(graphicsCmd, skyboxGpuImage);
+        imageBarriers[0] = {};
+        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].srcStageMask = StageFlags::Blit;
+        imageBarriers[0].srcAccessMask = AccessFlags::Write;
+        imageBarriers[0].srcQueueFamily = QueueFamily::Graphics;
+        imageBarriers[0].dstQueueFamily = QueueFamily::Compute;
+        pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
+    }
+    TracyVkCollect(tracyContext, graphicsCmd.commandBuffer);
+    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, &ownershipReleaseFinishedInfo, &ownershipReleaseFinishedInfo, WaitForFence::No);
+
+    Cmd computeCmd2 = allocateCmd(computeCommandPool);
+    beginOneTimeCmd(computeCmd2);
+    {
+        TracyVkZone(tracyContext, computeCmd2.commandBuffer, "Compute irradiance");
+        imageBarriers[0] = {};
+        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
+        imageBarriers[0].dstAccessMask = AccessFlags::Read;
+        imageBarriers[0].srcQueueFamily = QueueFamily::Graphics;
+        imageBarriers[0].dstQueueFamily = QueueFamily::Compute;
+        pipelineBarrier(computeCmd2, nullptr, 0, imageBarriers, 1);
+        vkCmdBindDescriptorSets(computeCmd2.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
+        vkCmdBindPipeline(computeCmd2.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeIrradianceMapPipeline);
+        vkCmdDispatch(computeCmd2.commandBuffer, computeIrradianceMapWorkGroupCount * 6, computeIrradianceMapWorkGroupCount, 1);
+    }
+    {
+        TracyVkZone(tracyContext, computeCmd2.commandBuffer, "Compute prefiltered");
+        vkCmdBindPipeline(computeCmd2.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePrefilteredMapPipeline);
+        vkCmdPushConstants(computeCmd2.commandBuffer, commonPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(prefilteredMapLevelCount), &prefilteredMapLevelCount);
+        vkCmdDispatch(computeCmd2.commandBuffer, computePrefilteredMapWorkGroupCount * 6, computePrefilteredMapWorkGroupCount, 1);
+    }
+    TracyVkCollect(tracyContext, computeCmd2.commandBuffer);
+    endAndSubmitOneTimeCmd(computeCmd2, computeQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
+
+    image.purpose = ImagePurpose::HDRI;
+    copyImage(skyboxGpuImage, image, QueueFamily::Compute);
+    writeImage(image, skyboxPath, GenerateMips::No, Compress::Yes);
+    copyImage(irradianceMapGpuImage, image, QueueFamily::Compute);
+    writeImage(image, irradianceMapPath, GenerateMips::No, Compress::Yes);
+    copyImage(prefilteredMapGpuImage, image, QueueFamily::Compute);
+    writeImage(image, prefilteredMapPath, GenerateMips::No, Compress::Yes);
+    freeImage(image);
 
     destroyGpuImage(hdriGpuImage);
     destroyGpuImage(skyboxGpuImage);
+    destroyGpuImage(irradianceMapGpuImage);
+    destroyGpuImage(prefilteredMapGpuImage);
+
+    for (uint8_t i = 0; i < prefilteredMapLevelCount; i++)
+    {
+        vkDestroyImageView(device, imageViews[i], nullptr);
+    }
+
+    freeCmd(graphicsCmd);
+    freeCmd(computeCmd1);
+    freeCmd(computeCmd2);
+    vkDestroySemaphore(device, semaphore, nullptr);
 }

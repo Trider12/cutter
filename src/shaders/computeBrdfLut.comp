@@ -1,0 +1,53 @@
+#include "pbr.h"
+
+layout(local_size_x_id = 0, local_size_y_id = 0) in;
+
+layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D brdfLutImage;
+layout(set = 0, binding = 6) uniform sampler linearClampSampler;
+
+vec4 computeBrdf(vec2 texCoords)
+{
+    const uint sampleCount = 256;
+
+    float NdotV = texCoords.x;
+    float roughness = texCoords.y;
+    vec3 V = vec3(sqrt(1.f - NdotV * NdotV), 0.f, NdotV); // sin, 0, cos
+    vec3 T = vec3(1.f, 0.f, 0.f);
+    vec3 B = vec3(0.f, 1.f, 0.f);
+    vec3 N = vec3(0.f, 0.f, 1.f);
+    float a = roughness * roughness;
+    float sumA = 0.f;
+    float sumB = 0.f;
+
+    for(uint i = 0; i < sampleCount; i++)
+    {
+        vec2 h2d = hammersley2d(i, sampleCount);
+        vec3 H = importanceSampleGGX(h2d, T, B, N, a);
+        vec3 L = reflect(-V, H);
+        float NdotL = max(L.z, 0.f);
+        float NdotH = max(H.z, 0.f);
+        float VdotH = max(dot(V, H), 0.f);
+
+        if(NdotL > 0.f)
+        {
+            float G = geometrySmith(NdotV, NdotL, roughness);
+            float G_Vis = (G * VdotH) / (NdotH * NdotV);
+            float Fc = pow(1.f - VdotH, 5.f);
+            sumA += (1.f - Fc) * G_Vis;
+            sumB += Fc * G_Vis;
+        }
+    }
+
+    return vec4(sumA / sampleCount, sumB / sampleCount, 0.f, 1.f);
+}
+
+void main()
+{
+    ivec2 imgSize = imageSize(brdfLutImage);
+    ivec2 imgCoords = ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(imgCoords, imgSize)))
+        return;
+
+    vec2 texCoords = vec2(imgCoords.x + 0.5f, imgSize.y - imgCoords.y - 0.5f) / imgSize;
+    imageStore(brdfLutImage, imgCoords, computeBrdf(texCoords));
+}

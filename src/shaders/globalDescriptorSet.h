@@ -35,4 +35,7 @@ layout(std430, set = 0, binding = 6) uniform CameraBlock
     CameraData cameraData;
 };
 
-layout(set = 0, binding = 7) uniform sampler linearRepeatSampler;
+layout(set = 0, binding = 7) uniform texture2D brdfLut;
+layout(set = 0, binding = 8) uniform textureCube irradianceMaps[];
+layout(set = 0, binding = 9) uniform textureCube prefilteredMaps[];
+layout(set = 0, binding = 10) uniform sampler linearRepeatSampler;

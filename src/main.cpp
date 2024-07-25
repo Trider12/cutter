@@ -23,7 +23,7 @@
 // skip importing if already exist
 #define SKIP_SCENE_REIMPORT 1
 #define SKIP_MATERIAL_REIMPORT 1
-#define SKIP_SKYBOX_REIMPORT 1
+#define SKIP_ENV_MAP_REIMPORT 1
 
 GLFWwindow *window;
 
@@ -67,7 +67,7 @@ const char *const appName = "Cutter";
 #define spvsPath     assetsPath "spv/"
 #define scenesPath   assetsPath "scenes/"
 #define fontsPath    assetsPath "fonts/"
-#define skyboxesPath assetsPath "skyboxes/"
+#define envmapsPath  assetsPath "envmaps/"
 #define texturesPath assetsPath "textures/"
 
 #define contentPath    "content/"
@@ -82,12 +82,15 @@ const struct ShaderCompileInfo
     ShaderType shaderType;
 } shaderInfos[]
 {
-    {shadersPath"basic.vert",          spvsPath"basic.vert.spv",          ShaderType::Vertex},
-    {shadersPath"basic.frag",          spvsPath"basic.frag.spv",          ShaderType::Fragment},
-    {shadersPath"drawSkybox.vert",     spvsPath"drawSkybox.vert.spv",     ShaderType::Vertex},
-    {shadersPath"drawSkybox.frag",     spvsPath"drawSkybox.frag.spv",     ShaderType::Fragment},
-    {shadersPath"generateSkybox.comp", spvsPath"generateSkybox.comp.spv", ShaderType::Compute},
-    {shadersPath"compute.comp",        spvsPath"compute.comp.spv",        ShaderType::Compute}
+    {shadersPath"basic.vert",                 spvsPath"basic.vert.spv",                 ShaderType::Vertex},
+    {shadersPath"basic.frag",                 spvsPath"basic.frag.spv",                 ShaderType::Fragment},
+    {shadersPath"drawSkybox.vert",            spvsPath"drawSkybox.vert.spv",            ShaderType::Vertex},
+    {shadersPath"drawSkybox.frag",            spvsPath"drawSkybox.frag.spv",            ShaderType::Fragment},
+    {shadersPath"computeSkybox.comp",         spvsPath"computeSkybox.comp.spv",         ShaderType::Compute},
+    {shadersPath"computeBrdfLut.comp",        spvsPath"computeBrdfLut.comp.spv",        ShaderType::Compute},
+    {shadersPath"computeIrradianceMap.comp",  spvsPath"computeIrradianceMap.comp.spv",  ShaderType::Compute},
+    {shadersPath"computePrefilteredMap.comp", spvsPath"computePrefilteredMap.comp.spv", ShaderType::Compute},
+    {shadersPath"compute.comp",               spvsPath"compute.comp.spv",               ShaderType::Compute}
 };
 
 const struct SceneImportInfo
@@ -173,6 +176,8 @@ const char *const hdriImagePaths[]
     hdriImagesPath"HDR_040_Field_Ref.hdr"
 };
 
+const char *const brdfLutImagePath = envmapsPath"brdfLut.ktx2";
+
 const char *const defaultFontPath = fontsPath"Roboto-Medium.ttf";
 const uint8_t defaultFontSize = 16;
 
@@ -226,6 +231,9 @@ GpuBuffer globalUniformBuffer;
 GpuImage modelTextures[MAX_MODEL_TEXTURES];
 uint8_t modelTextureCount;
 GpuImage skyboxImages[COUNTOF(hdriImagePaths)];
+GpuImage irradianceMaps[COUNTOF(hdriImagePaths)];
+GpuImage prefilteredMaps[COUNTOF(hdriImagePaths)];
+GpuImage brdfLut;
 uint32_t selectedSkybox = 0;
 
 VkSampler linearRepeatSampler;
@@ -252,12 +260,14 @@ LightingData lightData;
 
 bool rotateScene = false;
 float sceneRotationTime = 0.f;
-uint32_t sceneConfig = 0;
+uint32_t sceneConfig = SCENE_USE_LIGHTS | SCENE_USE_IBL;
 glm::vec4 lightDirsAndIntensitiesUI[MAX_LIGHTS];
 
 glm::vec2 prevCursorPos;
 bool firstCursorUpdate = true;
 bool cursorCaptured = false;
+
+uint32_t debugFlags;
 
 void initVulkan()
 {
@@ -294,6 +304,8 @@ void initVulkan()
     features12.uniformAndStorageBuffer8BitAccess = true;
     features12.uniformBufferStandardLayout = true;
     features12.hostQueryReset = true;
+    features12.runtimeDescriptorArray = true;
+    features12.descriptorBindingPartiallyBound = true;
 
     vkb::PhysicalDeviceSelector selector { vkbInstance, surface };
     vkb::PhysicalDevice vkbPhysicalDevice = selector
@@ -304,13 +316,12 @@ void initVulkan()
         .set_required_features(features)
         .set_required_features_11(features11)
         .set_required_features_12(features12)
-        .select()
+        .select(vkb::DeviceSelectionMode::only_fully_suitable)
         .value();
 
     VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2Features {};
     synchronization2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
     synchronization2Features.synchronization2 = true;
-
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures {};
     dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
     dynamicRenderingFeatures.dynamicRendering = true;
@@ -422,7 +433,7 @@ void recreateRenderTargets()
 void initFrameData()
 {
     ZoneScoped;
-    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex);
+    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, false);
     VkCommandBufferAllocateInfo commandBufferAllocateInfo;
     VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
@@ -477,7 +488,10 @@ void initDescriptors()
         {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT},
-        {7, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
+        {7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
+        {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
+        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
+        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
 
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
@@ -522,7 +536,7 @@ void initPipelines()
     // Model
     VkPushConstantRange range {};
     range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    range.size = sizeof(uint32_t);
+    range.size = 3 * sizeof(uint32_t);
     VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
     VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(layouts, COUNTOF(layouts), &range, 1);
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &modelPipelineLayout));
@@ -562,15 +576,12 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Skybox
-    VkSpecializationMapEntry specEntry { 0, 0, sizeof(uint32_t) };
-    uint32_t specData[] { COUNTOF(skyboxImages) };
-    VkSpecializationInfo specInfo { 1, &specEntry, sizeof(specData), specData };
     layouts[1] = skyboxDescriptorSetLayout;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &skyboxPipelineLayout));
     vertexShader = createShaderModuleFromSpv(device, shaderInfos[2].shaderSpvPath);
     fragmentShader = createShaderModuleFromSpv(device, shaderInfos[3].shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
-    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader, &specInfo);
+    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
     rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_GREATER_OR_EQUAL);
     graphicsPipelineCreateInfo.layout = skyboxPipelineLayout;
@@ -581,7 +592,7 @@ void initPipelines()
     // Compute
     layouts[1] = computeDescriptorSetLayout;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
-    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderInfos[5].shaderSpvPath);
+    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderInfos[8].shaderSpvPath);
     VkPipelineShaderStageCreateInfo computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &computePipeline));
@@ -676,8 +687,8 @@ void prepareAssets()
 void loadModel(const char *sceneDirPath)
 {
     ZoneScoped;
-    static const uint32_t maxIndexCount = UINT16_MAX * 4;
-    static const uint32_t maxVertexCount = UINT16_MAX;
+    static const uint32_t maxIndexCount = UINT16_MAX * 32;
+    static const uint32_t maxVertexCount = UINT16_MAX * 4;
     static const uint32_t maxTransformCount = UINT8_MAX;
     static const uint32_t maxMaterialCount = UINT8_MAX;
     static const uint32_t maxIndicesSize = maxIndexCount * sizeof(uint32_t);
@@ -709,6 +720,12 @@ void loadModel(const char *sceneDirPath)
     uint32_t normalUvsOffset = positionsOffset + positionsSize;
     uint32_t transformsOffset = normalUvsOffset + normalUvsSize;
     uint32_t materialsOffset = transformsOffset + transformsSize;
+
+    ASSERT(indicesSize <= maxIndicesSize);
+    ASSERT(positionsSize <= maxPositionsSize);
+    ASSERT(normalUvsSize <= maxNormalUvsSize);
+    ASSERT(transformsSize <= maxTransformsSize);
+    ASSERT(materialsSize <= maxMaterialsSize);
 
     if (!modelBuffer.buffer)
     {
@@ -776,7 +793,7 @@ void loadModel(const char *sceneDirPath)
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 }
 
-void loadSkybox(const char *scenePath)
+void loadEnvMaps(const char *scenePath)
 {
     ZoneScoped;
     skybox = loadSceneFromFile(scenePath);
@@ -806,35 +823,62 @@ void loadSkybox(const char *scenePath)
     };
     copyStagingBufferToBuffer(skyboxBuffer.buffer, copies, COUNTOF(copies), QueueFamily::Graphics);
 
-    VkDescriptorBufferInfo bufferInfos[]
+    VkDescriptorBufferInfo skyboxBufferInfos[]
     {
         {skyboxBuffer.buffer, positionsOffset, positionsSize},
     };
-    VkDescriptorImageInfo imageInfos[COUNTOF(hdriImagePaths)];
+
+#if SKIP_ENV_MAP_REIMPORT
+    if (!pathExists(brdfLutImagePath))
+#endif
+        computeBrdfLut(brdfLutImagePath);
+
+    Image image = loadImage(brdfLutImagePath);
+    brdfLut = createAndUploadGpuImage2D(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
+    freeImage(image);
+
+    VkDescriptorImageInfo brdfLutImageInfo { nullptr, brdfLut.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkDescriptorImageInfo skyboxImageInfos[COUNTOF(hdriImagePaths)];
+    VkDescriptorImageInfo irradianceImageInfos[COUNTOF(hdriImagePaths)];
+    VkDescriptorImageInfo prefilteredImageInfos[COUNTOF(hdriImagePaths)];
+    char skyboxImagePath[256], irradianceMapImagePath[256], prefilteredMapImagePath[256];
 
     for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
     {
-        char skyboxImagePath[256];
         const char *hdriFilename;
         size_t hdriFilenameLength;
         cwk_path_get_basename_wout_extension(hdriImagePaths[i], &hdriFilename, &hdriFilenameLength);
-        snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s.ktx2", skyboxesPath, (uint32_t)hdriFilenameLength, hdriFilename);
+        snprintf(skyboxImagePath, sizeof(skyboxImagePath), "%s/%.*s_skybox.ktx2", envmapsPath, (uint32_t)hdriFilenameLength, hdriFilename);
+        snprintf(irradianceMapImagePath, sizeof(irradianceMapImagePath), "%s/%.*s_irradiance.ktx2", envmapsPath, (uint32_t)hdriFilenameLength, hdriFilename);
+        snprintf(prefilteredMapImagePath, sizeof(prefilteredMapImagePath), "%s/%.*s_prefiltered.ktx2", envmapsPath, (uint32_t)hdriFilenameLength, hdriFilename);
 
-#if SKIP_SKYBOX_REIMPORT
+#if SKIP_ENV_MAP_REIMPORT
         if (!pathExists(skyboxImagePath))
 #endif
-            generateSkybox(hdriImagePaths[i], skyboxImagePath);
+            computeEnvMaps(hdriImagePaths[i], skyboxImagePath, irradianceMapImagePath, prefilteredMapImagePath);
 
-        Image image = loadImage(skyboxImagePath);
+        image = loadImage(skyboxImagePath);
         skyboxImages[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
         freeImage(image);
-        imageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        image = loadImage(irradianceMapImagePath);
+        irradianceMaps[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
+        freeImage(image);
+        image = loadImage(prefilteredMapImagePath);
+        prefilteredMaps[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
+        freeImage(image);
+
+        skyboxImageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        irradianceImageInfos[i] = { nullptr, irradianceMaps[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        prefilteredImageInfos[i] = { nullptr, prefilteredMaps[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     }
 
     VkWriteDescriptorSet writes[]
     {
-        initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos),
-        initWriteDescriptorSetImage(skyboxDescriptorSet, 1, COUNTOF(hdriImagePaths), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
+        initWriteDescriptorSetImage(globalDescriptorSet, 8, COUNTOF(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 9, COUNTOF(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
+        initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, skyboxBufferInfos),
+        initWriteDescriptorSetImage(skyboxDescriptorSet, 1, COUNTOF(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
     };
 
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
@@ -895,7 +939,7 @@ void initScene()
     prepareAssets();
 
     loadModel(sceneInfos[selectedScene].sceneDirPath);
-    loadSkybox(sceneInfos[0].sceneDirPath);
+    loadEnvMaps(sceneInfos[0].sceneDirPath);
     loadLights();
 
     camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
@@ -913,10 +957,14 @@ void terminateScene()
         destroyGpuImage(modelTextures[i]);
     }
 
-    for (uint8_t i = 0; i < COUNTOF(skyboxImages); i++)
+    for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
     {
         destroyGpuImage(skyboxImages[i]);
+        destroyGpuImage(irradianceMaps[i]);
+        destroyGpuImage(prefilteredMaps[i]);
     }
+
+    destroyGpuImage(brdfLut);
 }
 
 void glfwKeyCallback(GLFWwindow *wnd, int key, int scancode, int action, int mods)
@@ -1000,7 +1048,7 @@ void init()
     initImgui();
     initRenderdoc();
     initJobSystem();
-    initImageUtils(shaderInfos[4].shaderSpvPath, nullptr);
+    initImageUtils(shaderInfos[4].shaderSpvPath, shaderInfos[5].shaderSpvPath, shaderInfos[6].shaderSpvPath, shaderInfos[7].shaderSpvPath);
 
     initScene();
 }
@@ -1075,10 +1123,10 @@ void update(float delta)
     updateLogic(delta);
 }
 
-void drawGeometry(VkCommandBuffer cmd)
+void drawModel(VkCommandBuffer cmd)
 {
     ZoneScoped;
-    TracyVkZone(tracyContext, cmd, "Geometry");
+    TracyVkZone(tracyContext, cmd, "Model");
     FrameData &frame = frames[frameIndex];
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
@@ -1087,8 +1135,16 @@ void drawGeometry(VkCommandBuffer cmd)
     memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
     memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.cameraData, sizeof(CameraData));
 
+    uint32_t pushData[]
+    {
+        selectedMaterial,
+        selectedSkybox,
+#ifdef DEBUG
+        debugFlags
+#endif // DEBUG
+    };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
-    vkCmdPushConstants(cmd, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedMaterial);
+    vkCmdPushConstants(cmd, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), pushData);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1139,7 +1195,7 @@ void drawUI(VkCommandBuffer cmd)
     //ImGui::ShowDemoWindow();
     ImGui::Begin(appName, nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
-    if (ImGui::BeginTable("##table", 2, ImGuiTableFlags_NoHostExtendX))
+    if (ImGui::BeginTable("Table", 2, ImGuiTableFlags_NoHostExtendX))
     {
         const char *basename;
         ImGui::TableNextColumn();
@@ -1147,7 +1203,7 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::TextUnformatted("Model");
         ImGui::TableNextColumn();
         cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
-        if (ImGui::BeginCombo("##model", basename, ImGuiComboFlags_WidthFitPreview))
+        if (ImGui::BeginCombo("##Model", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
             {
@@ -1166,7 +1222,7 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Material");
         ImGui::TableNextColumn();
-        if (ImGui::BeginCombo("##material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
+        if (ImGui::BeginCombo("##Material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < COUNTOF(materialNames); i++)
             {
@@ -1184,7 +1240,7 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::TextUnformatted("Skybox");
         ImGui::TableNextColumn();
         cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
-        if (ImGui::BeginCombo("##skybox", basename, ImGuiComboFlags_WidthFitPreview))
+        if (ImGui::BeginCombo("##Skybox", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
             {
@@ -1208,13 +1264,62 @@ void drawUI(VkCommandBuffer cmd)
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Show wireframe");
         ImGui::TableNextColumn();
-        ImGui::CheckboxFlags("##Show wireframe", &sceneConfig, CONFIG_SHOW_WIREFRAME);
+        ImGui::CheckboxFlags("##Show wireframe", &sceneConfig, SCENE_SHOW_WIREFRAME);
 
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Use normal map");
         ImGui::TableNextColumn();
-        ImGui::CheckboxFlags("##Use normal map", &sceneConfig, CONFIG_USE_NORMAL_MAP);
+        ImGui::CheckboxFlags("##Use normal map", &sceneConfig, SCENE_USE_NORMAL_MAP);
+
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Use lights");
+        ImGui::TableNextColumn();
+        ImGui::CheckboxFlags("##Use lights", &sceneConfig, SCENE_USE_LIGHTS);
+
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Use IBL");
+        ImGui::TableNextColumn();
+        ImGui::CheckboxFlags("##Use IBL", &sceneConfig, SCENE_USE_IBL);
+
+#ifdef DEBUG
+        static const uint32_t debugChannels[]
+        {
+            0,
+            DEBUG_SHOW_COLOR,
+            DEBUG_SHOW_NORMAL,
+            DEBUG_SHOW_AO,
+            DEBUG_SHOW_ROUGHNESS,
+            DEBUG_SHOW_METALLIC,
+            DEBUG_SHOW_IRRADIANCE,
+            DEBUG_SHOW_PREFILTERED,
+            DEBUG_SHOW_DIFFUSE,
+            DEBUG_SHOW_SPECULAR
+        };
+        static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular" };
+        static uint8_t selectedChannel = 0;
+        static_assert(COUNTOF(debugChannels) == COUNTOF(debugChannelNames), "");
+
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Debug Channel");
+        ImGui::TableNextColumn();
+        if (ImGui::BeginCombo("##Debug Channel", debugChannelNames[selectedChannel], ImGuiComboFlags_WidthFitPreview))
+        {
+            for (uint8_t i = 0; i < COUNTOF(debugChannelNames); i++)
+            {
+                bool selected = i == selectedChannel;
+                if (ImGui::Selectable(debugChannelNames[i], selected) && !selected)
+                {
+                    selectedChannel = i;
+                    debugFlags = debugChannels[selectedChannel];
+                }
+            }
+            ImGui::EndCombo();
+        }
+#endif // DEBUG
 
         ImGui::EndTable();
     }
@@ -1223,7 +1328,7 @@ void drawUI(VkCommandBuffer cmd)
     {
         if (ImGui::TreeNode("Dir lights"))
         {
-            if (ImGui::BeginTable("##table", 3, ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_Borders))
+            if (ImGui::BeginTable("##Table", 3, ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_Borders))
             {
                 ImGui::TableSetupColumn("#");
                 ImGui::TableSetupColumn("Direction");
@@ -1317,7 +1422,7 @@ void draw()
         pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 
         vkCmdBeginRenderingKHR(cmd, &renderingInfo);
-        drawGeometry(cmd);
+        drawModel(cmd);
         drawSkybox(cmd);
         drawUI(cmd);
         vkCmdEndRenderingKHR(cmd);

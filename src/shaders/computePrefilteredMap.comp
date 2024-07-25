@@ -1,0 +1,81 @@
+#include "pbr.h"
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x_id = 0, local_size_y_id = 0) in;
+
+layout(set = 0, binding = 2) uniform textureCube skyboxTexture;
+layout(set = 0, binding = 5, rgba16f) uniform restrict writeonly imageCube prefilteredMapImages[];
+layout(set = 0, binding = 6) uniform sampler linearClampSampler;
+
+layout(push_constant) uniform ConstantBlock
+{
+    uint mipLevelCount;
+};
+
+vec4 computePrefilteredColor(vec3 pos, float roughness)
+{
+    // filtered importance sampling using a GGX PDF
+    const uint sampleCount = 256;
+    const float sampleCountRcp = 1.f / sampleCount;
+    const ivec2 skyboxSize = textureSize(skyboxTexture, 0);
+    const float omegaTexel = 4.f * PI / (6.f * skyboxSize.x * skyboxSize.y);
+    const float mipBias = 1.f;
+
+    vec3 N = normalize(pos);
+    vec3 V = N;
+    vec3 T = normalize(cross(abs(N.z) < 0.999f ? vec3(0.f, 0.f, 1.f) : vec3(1.f, 0.f, 0.f), N));
+    vec3 B = normalize(cross(N, T));
+
+    float a = roughness * roughness;
+    vec3 prefilteredColor = vec3(0.f);
+    float totalWeight = 0.0;
+
+    for(uint i = 0; i < sampleCount; i++)
+    {
+        vec2 h2d = hammersley2d(i, sampleCount);
+        vec3 H = importanceSampleGGX(h2d, T, B, N, a);
+        vec3 L = reflect(-V, H);
+        float NdotL = max(dot(N, L), 0.f);
+
+        if(NdotL >= 0.f)
+        {
+            // skip the NdotH and HdotV terms in the PDF because they cancel out
+            // since V == N, HdotV == HdotN == NdotH
+            float NdotH = max(dot(N, H), 0.f);
+            float pdfRcp = 4.f / distributionGGX(NdotH, roughness);
+            float omegaSample = sampleCountRcp * pdfRcp;
+            float mipLevel = roughness == 0.f ? 0.f : max(0.5f * log2(omegaSample / omegaTexel) + mipBias, 0.f);
+
+            prefilteredColor += textureLod(samplerCube(skyboxTexture, linearClampSampler), L, mipLevel).rgb * NdotL;
+            totalWeight += NdotL;
+        }
+    }
+
+    return vec4(prefilteredColor / totalWeight, 1.f);
+}
+
+void main()
+{
+    for(uint i = 0; i < mipLevelCount; i++)
+    {
+        uint faceSize = imageSize(prefilteredMapImages[i]).x;
+        uint faceIndex = gl_GlobalInvocationID.x / faceSize;
+        uvec2 texelCoords = uvec2(gl_GlobalInvocationID.x % faceSize, gl_GlobalInvocationID.y);
+
+        if(faceIndex > 5 || texelCoords.y >= faceSize)
+            return;
+
+        float roughness = float(i) / (mipLevelCount - 1);
+        vec2 pos = (2.f * texelCoords + 1.f) / faceSize - 1.f;
+        vec3 positions[6] = vec3[6](
+            vec3(1.f, -pos.y, -pos.x),
+            vec3(-1.f, -pos.y, pos.x),
+            vec3(pos.x, 1.f, pos.y),
+            vec3(pos.x, -1.f, -pos.y),
+            vec3(pos.x, -pos.y, 1.f),
+            vec3(-pos.x, -pos.y, -1.f)
+        );
+        imageStore(prefilteredMapImages[i], ivec3(texelCoords, faceIndex), computePrefilteredColor(positions[faceIndex], roughness));
+    }
+}

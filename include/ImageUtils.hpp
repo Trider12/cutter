@@ -29,7 +29,7 @@ static_assert(sizeof(Image) == 24, "");
 EnumBool(GenerateMips);
 EnumBool(Compress);
 
-void initImageUtils(const char *generateSkyboxShaderPath, const char *generateMipsShaderPath);
+void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdfLutShaderPath, const char *computeIrradianceMapShaderPath, const char *computePrefilteredMapShaderPath);
 
 void terminateImageUtils();
 
@@ -49,4 +49,6 @@ typedef void (*IterateCallback)(const Image &image, uint8_t level, uint8_t face,
 
 uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, void *userData);
 
-void generateSkybox(const char *hdriPath, const char *skyboxPath);
+void computeBrdfLut(const char *brdfLutPath);
+
+void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *irradianceMapPath, const char *prefilteredMapPath);

@@ -2,7 +2,11 @@
 
 #include <assert.h>
 #include <stdint.h>
-#include <stdlib.h>
+#ifdef _MSC_VER
+#include <malloc.h> // for alloca
+#else // assume UNIX
+#include <alloca.h> // for alloca
+#endif
 
 #if defined _DEBUG || !defined NDEBUG
 #define DEBUG
@@ -18,14 +22,9 @@
 
 #define UNUSED(var) (void)(var)
 
-#ifdef _MSC_VER
-#define COUNTOF _countof
-#include <malloc.h> // for _alloca
-#define alloca _alloca
-#else // assume UNIX
-#define COUNTOF(arr) sizeof(arr) / sizeof((arr)[0])
-#include <alloca.h> // for alloca
-#endif
+template <typename T, uint32_t N>
+constexpr uint32_t countof(T(&)[N]) { return N; }
+#define COUNTOF countof
 
 #define defineEnumOperators(enumType, intType) \
 inline intType  operator+(enumType a) { return (intType)a; } \
@@ -35,7 +34,7 @@ inline enumType operator|(enumType a, enumType b) { return (enumType)((intType)a
 inline intType  operator&(enumType a, intType b) { return (intType)a & b; } \
 inline intType  operator|(enumType a, intType b) { return (intType)a | b; } \
 inline intType  operator&(intType a, enumType b) { return a & (intType)b; } \
-inline intType  operator|(intType a, enumType b) { return a | (intType)b; } \
+inline intType  operator|(intType a, enumType b) { return a | (intType)b; }
 
 #define EnumBool(enumType) enum class enumType : uint8_t { No = 0, Yes = 1 }
 
@@ -58,6 +57,11 @@ inline uint32_t aligned(uint32_t value, uint32_t alignment) // alignment must be
 {
     ASSERT(isPowerOf2(alignment));
     return (value + alignment - 1) & ~(alignment - 1);
+}
+
+inline bool isValidString(const char *str)
+{
+    return str && *str;
 }
 
 bool mkdir(const char *path, bool recursive);

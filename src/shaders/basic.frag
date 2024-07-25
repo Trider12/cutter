@@ -1,6 +1,6 @@
+#include "fragmentUtils.h"
 #include "globalDescriptorSet.h"
 #include "pbr.h"
-#include "utils.h"
 
 struct VsOut
 {
@@ -23,24 +23,11 @@ layout(set = 1, binding = 0) uniform texture2D textures[MAX_MODEL_TEXTURES];
 layout(push_constant) uniform ConstantBlock
 {
     uint materialIndex;
+    uint skyboxIndex;
+#ifdef DEBUG
+    uint debugFlags;
+#endif // DEBUG
 };
-
-mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv)
-{
-    // get edge vectors of the pixel triangle
-    vec3 dp1 = dFdx(p);
-    vec3 dp2 = dFdy(p);
-    vec2 duv1 = dFdx(uv);
-    vec2 duv2 = dFdy(uv);
-    // solve the linear system
-    vec3 dp2perp = cross(dp2, N);
-    vec3 dp1perp = cross(N, dp1);
-    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-    // construct a scale-invariant frame
-    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
-    return mat3(T * invmax, B * invmax, N);
-}
 
 vec3 perturbNormal(vec3 N, vec3 V, vec2 texcoord, uint normalMapIndex)
 {
@@ -52,18 +39,6 @@ vec3 perturbNormal(vec3 N, vec3 V, vec2 texcoord, uint normalMapIndex)
     return normalize(TBN * map);
 }
 
-float edgeFactor(vec3 bary)
-{
-    const float thickness = 1.f;
-    vec3 a3 = smoothstep(vec3(0.f), fwidth(bary) * thickness, bary);
-    return 1.f - min(min(a3.x, a3.y), a3.z);
-}
-
-bool isTextureValid(uint textureIndex)
-{
-    return bool(~textureIndex);
-}
-
 void main()
 {
     MaterialData md = materials[materialIndex];
@@ -72,40 +47,101 @@ void main()
     vec3 N = normalize(fsIn.norm);
     vec3 V = normalize(viewVec);
 
-    if(bool(cameraData.sceneConfig & CONFIG_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
+    if(bool(cameraData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
     {
         N = perturbNormal(N, viewVec, fsIn.uv, md.normalTexIndex);
     }
 
+    vec3 R = reflect(-V, N);
+    float NdotV = max(dot(N, V), EPSILON);
+
     vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(textures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
-    vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(textures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(0.f);
-    vec3 Lo = vec3(0.f);
+    vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(textures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f, 0.f, 0.f);
+    float ao = bool(md.mask & MATERIAL_HAS_AO_TEX) ? aoRoughMetal.r : 1.f;
+    float roughness = max(aoRoughMetal.g, 0.04f);
+    float metallic = aoRoughMetal.b;
 
-    for(uint i = 0; i < uint(lightData.dirLightCount); i++)
+    vec3 irradiance = texture(samplerCube(irradianceMaps[skyboxIndex], linearRepeatSampler), N).rgb;
+    vec3 prefiltered = textureLod(samplerCube(prefilteredMaps[skyboxIndex], linearRepeatSampler), R, roughness * MAX_PREFILTERED_MAP_LOD).rgb;
+    vec2 brdf = texture(sampler2D(brdfLut, linearRepeatSampler), vec2(NdotV, roughness)).rg;
+
+    vec3 fDiff, fSpec;
+    vec3 LoDiff = vec3(0.f), LoSpec = vec3(0.f);
+
+    if(bool(cameraData.sceneConfig & SCENE_USE_LIGHTS))
     {
-        vec3 L = -normalize(vec3(lightData.lights[i].x, lightData.lights[i].y, lightData.lights[i].z));
-        vec3 H = normalize(V + L);
-        float NdotV = max(dot(N, V), 0.f);
-        float NdotL = max(dot(N, L), 0.f);
-        float NdotH = max(dot(N, H), 0.f);
-        float HdotV = max(dot(H, V), 0.f);
+        for(uint i = 0; i < uint(lightData.dirLightCount); i++)
+        {
+            vec3 L = -normalize(vec3(lightData.lights[i].x, lightData.lights[i].y, lightData.lights[i].z));
+            vec3 H = normalize(V + L);
+            float NdotL = max(dot(N, L), 0.f);
+            float NdotH = max(dot(N, H), 0.f);
+            float HdotV = max(dot(H, V), 0.f);
 
-        vec3 lightColor = vec3(lightData.lights[i].r, lightData.lights[i].g, lightData.lights[i].b);
-        float intensity = float(lightData.lights[i].intensity);
-        vec3 Li = lightColor * intensity;
+            vec3 lightColor = vec3(lightData.lights[i].r, lightData.lights[i].g, lightData.lights[i].b);
+            float intensity = float(lightData.lights[i].intensity);
+            vec3 Li = lightColor * intensity;
 
-        Lo += BRDF(NdotV, NdotL, NdotH, HdotV, albedo, aoRoughMetal.g, aoRoughMetal.b) * Li * NdotL;
+            directBRDF(NdotV, NdotL, NdotH, HdotV, albedo, roughness, metallic, fDiff, fSpec);
+            LoDiff += fDiff * Li * NdotL;
+            LoSpec += fSpec * Li * NdotL;
+        }
+
+//        for(uint i = 0; i < uint(lightData.pointLightCount); i++)
+//        {
+//            uint offset = uint(lightData.dirLightCount);
+//            vec3 lightPos = vec3(lightData.lights[offset + i].x, lightData.lights[offset + i].y, lightData.lights[offset + i].z);
+//            vec3 L = normalize(lightPos - fsIn.pos);
+//        }
     }
 
-//    for(uint i = 0; i < uint(lightData.pointLightCount); i++)
-//    {
-//        uint offset = uint(lightData.dirLightCount);
-//        vec3 lightPos = vec3(lightData.lights[offset + i].x, lightData.lights[offset + i].y, lightData.lights[offset + i].z);
-//        vec3 L = normalize(lightPos - fsIn.pos);
-//    }
+    if(bool(cameraData.sceneConfig & SCENE_USE_IBL))
+    {
+        envBRDF(albedo, roughness, metallic, irradiance, prefiltered, brdf, fDiff, fSpec);
+        LoDiff += fDiff * ao;
+        LoSpec += fSpec * ao;
+    }
 
-    vec3 outColor = reinhardTonemap(Lo);
-    vec3 wireframeColor = vec3(0.f);
-    outColor = mix(outColor, wireframeColor, edgeFactor(fsIn.bary) * uint(bool(cameraData.sceneConfig & CONFIG_SHOW_WIREFRAME)));
+    vec3 outColor = reinhardTonemap(LoDiff + LoSpec);
+
+#ifdef DEBUG
+    switch(debugFlags)
+    {
+        case DEBUG_SHOW_COLOR:
+            outColor = albedo;
+            break;
+        case DEBUG_SHOW_NORMAL:
+            outColor = N;
+            break;
+        case DEBUG_SHOW_AO:
+            outColor = vec3(ao);
+            break;
+        case DEBUG_SHOW_ROUGHNESS:
+            outColor = vec3(roughness);
+            break;
+        case DEBUG_SHOW_METALLIC:
+            outColor = vec3(metallic);
+            break;
+        case DEBUG_SHOW_IRRADIANCE:
+            outColor = irradiance;
+            break;
+        case DEBUG_SHOW_PREFILTERED:
+            outColor = prefiltered;
+            break;
+        case DEBUG_SHOW_DIFFUSE:
+            outColor = LoDiff;
+            break;
+        case DEBUG_SHOW_SPECULAR:
+            outColor = LoSpec;
+            break;
+        default:
+            break;
+    }
+#endif // DEBUG
+
+    const vec3 wireframeColor = vec3(0.f);
+    if(bool(cameraData.sceneConfig & SCENE_SHOW_WIREFRAME))
+        outColor = mix(outColor, wireframeColor, edgeFactor(fsIn.bary));
+
     outFragColor = vec4(outColor, 1.f);
 }

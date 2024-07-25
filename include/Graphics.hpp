@@ -7,6 +7,12 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #include <vk_mem_alloc.h>
 
+struct Cmd
+{
+    VkCommandBuffer commandBuffer;
+    VkCommandPool commandPool;
+};
+
 struct GpuBuffer
 {
     VkBuffer buffer;
@@ -22,6 +28,8 @@ struct GpuImage
     VmaAllocation allocation;
     VkExtent3D imageExtent;
     VkFormat imageFormat;
+    uint8_t levelCount;
+    uint8_t layerCount;
 };
 
 enum class QueueFamily : uint8_t
@@ -41,6 +49,10 @@ void initGraphics();
 
 void terminateGraphics();
 
+Cmd allocateCmd(VkCommandPool pool);
+
+void freeCmd(Cmd cmd);
+
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
@@ -48,18 +60,23 @@ GpuBuffer createGpuBuffer(uint32_t size,
 
 GpuImage createGpuImage2D(VkFormat format,
     VkExtent2D extent,
-    uint32_t mipLevels,
+    uint8_t mipLevels,
     VkImageUsageFlags usageFlags,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+
+void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily);
 
 GpuImage createAndUploadGpuImage2D(const Image &image,
     QueueFamily dstQueueFamily,
     VkImageUsageFlags usageFlags,
+    VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
 GpuImage createGpuImage2DArray(VkFormat format,
     VkExtent2D extent,
-    uint32_t mipLevels,
+    uint8_t mipLevels,
     VkImageUsageFlags usageFlags,
     Cubemap cubemap,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
@@ -68,6 +85,7 @@ GpuImage createAndUploadGpuImage2DArray(const Image &image,
     QueueFamily dstQueueFamily,
     VkImageUsageFlags usageFlags,
     Cubemap cubemap,
+    VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
 void destroyGpuBuffer(GpuBuffer &buffer);
@@ -126,15 +144,21 @@ struct ImageBarrier
     uint32_t layerCount; // 0 == all
 };
 
+void pipelineBarrier(Cmd cmd,
+    BufferBarrier *bufferBarriers,
+    uint32_t bufferBarrierCount,
+    ImageBarrier *imageBarriers,
+    uint32_t imageBarrierCount);
+
 void pipelineBarrier(VkCommandBuffer cmd,
     BufferBarrier *bufferBarriers,
     uint32_t bufferBarrierCount,
     ImageBarrier *imageBarriers,
     uint32_t imageBarrierCount);
 
-void beginOneTimeCmd(VkCommandBuffer cmd, VkCommandPool commandPool);
+void beginOneTimeCmd(Cmd cmd);
 
-void endAndSubmitOneTimeCmd(VkCommandBuffer cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
+void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 
 void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);
 
