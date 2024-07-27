@@ -52,18 +52,18 @@ void main()
         N = perturbNormal(N, viewVec, fsIn.uv, md.normalTexIndex);
     }
 
-    vec3 R = reflect(-V, N);
-    float NdotV = max(dot(N, V), EPSILON);
-
     vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(textures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
     vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(textures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f, 0.f, 0.f);
     float ao = bool(md.mask & MATERIAL_HAS_AO_TEX) ? aoRoughMetal.r : 1.f;
-    float roughness = max(aoRoughMetal.g, 0.04f);
+    float roughness = max(aoRoughMetal.g, 0.01f);
     float metallic = aoRoughMetal.b;
+
+    vec3 R = reflect(-V, N);
+    float NdotV = max(dot(N, V), 0.f);
 
     vec3 irradiance = texture(samplerCube(irradianceMaps[skyboxIndex], linearRepeatSampler), N).rgb;
     vec3 prefiltered = textureLod(samplerCube(prefilteredMaps[skyboxIndex], linearRepeatSampler), R, roughness * MAX_PREFILTERED_MAP_LOD).rgb;
-    vec2 brdf = texture(sampler2D(brdfLut, linearRepeatSampler), vec2(NdotV, roughness)).rg;
+    vec2 brdf = texture(sampler2D(brdfLut, linearClampSampler), vec2(NdotV, roughness)).rg;
 
     vec3 fDiff, fSpec;
     vec3 LoDiff = vec3(0.f), LoSpec = vec3(0.f);

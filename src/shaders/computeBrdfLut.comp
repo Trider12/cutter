@@ -3,7 +3,6 @@
 layout(local_size_x_id = 0, local_size_y_id = 0) in;
 
 layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D brdfLutImage;
-layout(set = 0, binding = 6) uniform sampler linearClampSampler;
 
 vec4 computeBrdf(vec2 texCoords)
 {
@@ -18,6 +17,7 @@ vec4 computeBrdf(vec2 texCoords)
     float a = roughness * roughness;
     float sumA = 0.f;
     float sumB = 0.f;
+    float weight = 0.f;
 
     for(uint i = 0; i < sampleCount; i++)
     {
@@ -31,14 +31,15 @@ vec4 computeBrdf(vec2 texCoords)
         if(NdotL > 0.f)
         {
             float G = geometrySmith(NdotV, NdotL, roughness);
-            float G_Vis = (G * VdotH) / (NdotH * NdotV);
+            float G_Vis = (G * VdotH) / max(NdotH * NdotV, EPSILON);
             float Fc = pow(1.f - VdotH, 5.f);
             sumA += (1.f - Fc) * G_Vis;
             sumB += Fc * G_Vis;
+            weight += 1.f;
         }
     }
 
-    return vec4(sumA / sampleCount, sumB / sampleCount, 0.f, 1.f);
+    return vec4(sumA / weight, sumB / weight, 0.f, 1.f);
 }
 
 void main()

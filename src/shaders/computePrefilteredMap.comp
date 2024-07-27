@@ -45,7 +45,7 @@ vec4 computePrefilteredColor(vec3 pos, float roughness)
             float NdotH = max(dot(N, H), 0.f);
             float pdfRcp = 4.f / distributionGGX(NdotH, roughness);
             float omegaSample = sampleCountRcp * pdfRcp;
-            float mipLevel = roughness == 0.f ? 0.f : max(0.5f * log2(omegaSample / omegaTexel) + mipBias, 0.f);
+            float mipLevel = roughness == 0.f ? 0.f : (max(0.5f * log2(omegaSample / omegaTexel), 0.f) + mipBias);
 
             prefilteredColor += textureLod(samplerCube(skyboxTexture, linearClampSampler), L, mipLevel).rgb * NdotL;
             totalWeight += NdotL;

@@ -32,7 +32,7 @@ vec4 computeIrradiance(vec3 pos)
 
         float pdfRcp = 1.f / cosTheta; // skip multiplying by PI
         float omegaSample = sampleCountRcp * pdfRcp;
-        float mipLevel = max(0.5f * log2(omegaSample / omegaTexel) + mipBias, 0.f);
+        float mipLevel = max(0.5f * log2(omegaSample / omegaTexel), 0.f) + mipBias;
 
         irradiance += textureLod(samplerCube(skyboxTexture, linearClampSampler), sampleVec, mipLevel).rgb;
     }

@@ -236,6 +236,7 @@ GpuImage prefilteredMaps[COUNTOF(hdriImagePaths)];
 GpuImage brdfLut;
 uint32_t selectedSkybox = 0;
 
+VkSampler linearClampSampler;
 VkSampler linearRepeatSampler;
 
 struct FrameData
@@ -464,7 +465,9 @@ void terminateFrameData()
 void initDescriptors()
 {
     ZoneScoped;
-    VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
+    samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearRepeatSampler));
 
     VkDescriptorPoolSize poolSizes[]
@@ -491,7 +494,8 @@ void initDescriptors()
         {7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
         {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
-        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
+        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
+        {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
 
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
@@ -522,6 +526,7 @@ void initDescriptors()
 
 void terminateDescriptors()
 {
+    vkDestroySampler(device, linearClampSampler, nullptr);
     vkDestroySampler(device, linearRepeatSampler, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalDescriptorSetLayout, nullptr);

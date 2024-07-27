@@ -45,7 +45,7 @@ static VkSampler linearClampSampler;
 static constexpr uint16_t skyboxFaceSize = 2048;
 static constexpr uint16_t brdfLutSize = 512;
 static constexpr uint16_t irradianceMapFaceSize = 32;
-static constexpr uint16_t prefilteredMapFaceSize = 256;
+static constexpr uint16_t prefilteredMapFaceSize = 128;
 static constexpr uint32_t prefilteredMapLevelCount = MAX_PREFILTERED_MAP_LOD + 1;
 
 static uint32_t computeSkyboxWorkGroupSize, computeSkyboxWorkGroupCount;
@@ -293,6 +293,7 @@ static uint32_t calcImagaDataSize(const Image &image)
     return dataSize * image.faceCount * getTexelSize(image);
 }
 
+#ifdef ENABLE_COMPRESSION
 struct CompressBlockRowOptions
 {
     uint16_t mipWidth;
@@ -606,6 +607,7 @@ static bool compressImage(const Image &image, Image &compressedImage)
 
     return true;
 }
+#endif // ENABLE_COMPRESSION
 
 uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, void *userData)
 {
@@ -768,8 +770,12 @@ void writeImage(Image &image, const char *outImageFilename, GenerateMips generat
 
     Image compressedImage = {};
 
+#ifdef ENABLE_COMPRESSION
     if (compress == Compress::Yes)
         compressImage(image, compressedImage);
+#else
+    UNUSED(compress);
+#endif // ENABLE_COMPRESSION
 
     ktxTexture2 *texture;
     ktxTextureCreateInfo createInfo {};

@@ -16,7 +16,7 @@
 
 #define MAX_LIGHTS 16
 #define MAX_MODEL_TEXTURES 64
-#define MAX_PREFILTERED_MAP_LOD 8
+#define MAX_PREFILTERED_MAP_LOD 4
 
 #define SCENE_SHOW_WIREFRAME (1u << 0)
 #define SCENE_USE_NORMAL_MAP (1u << 1)
@@ -46,7 +46,7 @@ struct NormalUv
 {
     int8_t x, y, z; // snorm
     uint8_t effectMask;
-    float16_t u, v; // unorm
+    float16_t u, v;
 };
 
 struct MaterialData

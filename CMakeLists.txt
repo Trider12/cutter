@@ -69,6 +69,7 @@ target_include_directories(cutter PRIVATE
 )
 
 target_compile_definitions(cutter PRIVATE
+    ENABLE_COMPRESSION
     VK_NO_PROTOTYPES
     TRACY_ENABLE
 )
