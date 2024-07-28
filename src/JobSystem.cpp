@@ -1,12 +1,11 @@
 #include "JobSystem.hpp"
+#include "DebugUtils.hpp"
 #include "Utils.hpp"
 
 #include <condition_variable>
 #include <queue>
 #include <thread>
 #include <vector>
-
-#include <tracy/Tracy.hpp>
 
 struct Job
 {

@@ -8,10 +8,6 @@
 #include <alloca.h> // for alloca
 #endif
 
-#if defined _DEBUG || !defined NDEBUG
-#define DEBUG
-#endif
-
 #define ASSERT assert
 
 #ifdef DEBUG
@@ -21,6 +17,8 @@
 #endif
 
 #define UNUSED(var) (void)(var)
+
+#define NAMEOF(var) #var
 
 template <typename T, uint32_t N>
 constexpr uint32_t countof(T(&)[N]) { return N; }

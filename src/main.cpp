@@ -7,9 +7,6 @@
 #include <backends/imgui_impl_vulkan.h>
 #include <meshoptimizer.h>
 #include <VkBootstrap.h>
-#define TRACY_VK_USE_SYMBOL_TABLE
-#include <tracy/Tracy.hpp>
-#include <tracy/TracyVulkan.hpp>
 
 #include "Camera.hpp"
 #include "DebugUtils.hpp"
@@ -90,6 +87,7 @@ const struct ShaderCompileInfo
     {shadersPath"computeBrdfLut.comp",        spvsPath"computeBrdfLut.comp.spv",        ShaderType::Compute},
     {shadersPath"computeIrradianceMap.comp",  spvsPath"computeIrradianceMap.comp.spv",  ShaderType::Compute},
     {shadersPath"computePrefilteredMap.comp", spvsPath"computePrefilteredMap.comp.spv", ShaderType::Compute},
+    {shadersPath"normalizeNormalMap.comp",    spvsPath"normalizeNormalMap.comp.spv",    ShaderType::Compute},
     {shadersPath"compute.comp",               spvsPath"compute.comp.spv",               ShaderType::Compute}
 };
 
@@ -243,10 +241,7 @@ struct FrameData
 {
     VkSemaphore imageAcquiredSemaphore, renderFinishedSemaphore;
     VkFence renderFinishedFence;
-
-    VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer;
-
+    Cmd cmd;
     CameraData cameraData;
 };
 
@@ -435,15 +430,13 @@ void initFrameData()
 {
     ZoneScoped;
     VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, false);
-    VkCommandBufferAllocateInfo commandBufferAllocateInfo;
     VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
 
     for (FrameData &frame : frames)
     {
-        vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frame.commandPool));
-        commandBufferAllocateInfo = initCommandBufferAllocateInfo(frame.commandPool, 1);
-        vkVerify(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &frame.commandBuffer));
+        vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frame.cmd.commandPool));
+        frame.cmd = allocateCmd(frame.cmd.commandPool);
 
         vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &frame.renderFinishedFence));
         vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frame.imageAcquiredSemaphore));
@@ -455,7 +448,7 @@ void terminateFrameData()
 {
     for (FrameData &frame : frames)
     {
-        vkDestroyCommandPool(device, frame.commandPool, nullptr);
+        vkDestroyCommandPool(device, frame.cmd.commandPool, nullptr);
         vkDestroyFence(device, frame.renderFinishedFence, nullptr);
         vkDestroySemaphore(device, frame.imageAcquiredSemaphore, nullptr);
         vkDestroySemaphore(device, frame.renderFinishedSemaphore, nullptr);
@@ -597,7 +590,7 @@ void initPipelines()
     // Compute
     layouts[1] = computeDescriptorSetLayout;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
-    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderInfos[8].shaderSpvPath);
+    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderInfos[9].shaderSpvPath);
     VkPipelineShaderStageCreateInfo computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &computePipeline));
@@ -1053,7 +1046,7 @@ void init()
     initImgui();
     initRenderdoc();
     initJobSystem();
-    initImageUtils(shaderInfos[4].shaderSpvPath, shaderInfos[5].shaderSpvPath, shaderInfos[6].shaderSpvPath, shaderInfos[7].shaderSpvPath);
+    initImageUtils(shaderInfos[4].shaderSpvPath, shaderInfos[5].shaderSpvPath, shaderInfos[6].shaderSpvPath, shaderInfos[7].shaderSpvPath, shaderInfos[8].shaderSpvPath);
 
     initScene();
 }
@@ -1128,10 +1121,10 @@ void update(float delta)
     updateLogic(delta);
 }
 
-void drawModel(VkCommandBuffer cmd)
+void drawModel(Cmd cmd)
 {
     ZoneScoped;
-    TracyVkZone(tracyContext, cmd, "Model");
+    ScopedGpuZone(cmd, "Model");
     FrameData &frame = frames[frameIndex];
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
@@ -1148,8 +1141,8 @@ void drawModel(VkCommandBuffer cmd)
         debugFlags
 #endif // DEBUG
     };
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
-    vkCmdPushConstants(cmd, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), pushData);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
+    vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), pushData);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1158,41 +1151,41 @@ void drawModel(VkCommandBuffer cmd)
     viewport.height = -(float)swapchainImageExtent.height;
     viewport.minDepth = 0.f;
     viewport.maxDepth = 1.f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetViewport(cmd.commandBuffer, 0, 1, &viewport);
 
     VkRect2D scissor {};
     scissor.offset.x = 0;
     scissor.offset.y = 0;
     scissor.extent.width = swapchainImageExtent.width;
     scissor.extent.height = swapchainImageExtent.height;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
 
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
-    vkCmdDraw(cmd, (uint32_t)model.indices.size(), 1, 0, 0);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
+    vkCmdDraw(cmd.commandBuffer, (uint32_t)model.indices.size(), 1, 0, 0);
 }
 
-void drawSkybox(VkCommandBuffer cmd)
+void drawSkybox(Cmd cmd)
 {
     ZoneScoped;
-    TracyVkZone(tracyContext, cmd, "Skybox");
+    ScopedGpuZone(cmd, "Skybox");
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
-    vkCmdBindIndexBuffer(cmd, skyboxBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdPushConstants(cmd, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedSkybox);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
+    vkCmdBindIndexBuffer(cmd.commandBuffer, skyboxBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedSkybox);
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, skyboxDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
-    vkCmdDrawIndexed(cmd, (uint32_t)skybox.indices.size(), 1, 0, 0, 0);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
+    vkCmdDrawIndexed(cmd.commandBuffer, (uint32_t)skybox.indices.size(), 1, 0, 0, 0);
 }
 
-void drawUI(VkCommandBuffer cmd)
+void drawUI(Cmd cmd)
 {
     ZoneScoped;
-    TracyVkZone(tracyContext, cmd, "ImGui");
+    ScopedGpuZone(cmd, "ImGui");
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -1371,7 +1364,7 @@ void drawUI(VkCommandBuffer cmd)
     ImGui::End();
     ////////
     ImGui::Render();
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd.commandBuffer);
 }
 
 void draw()
@@ -1384,7 +1377,8 @@ void draw()
     }
 
     FrameData &frame = frames[frameIndex];
-    vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
+    auto val = vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX);
+    vkVerify(val);
     uint32_t swapchainImageIndex;
     VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
 
@@ -1404,12 +1398,11 @@ void draw()
 
     vkVerify(vkResetFences(device, 1, &frame.renderFinishedFence));
 
-    vkVerify(vkResetCommandPool(device, frame.commandPool, 0));
-    VkCommandBuffer cmd = frame.commandBuffer;
-    VkCommandBufferBeginInfo commandBufferBeginInfo = initCommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    vkVerify(vkBeginCommandBuffer(cmd, &commandBufferBeginInfo));
+    vkVerify(vkResetCommandPool(device, frame.cmd.commandPool, 0));
+    Cmd cmd = frame.cmd;
+    beginOneTimeCmd(cmd);
     {
-        TracyVkZone(tracyContext, cmd, "Draw");
+        ScopedGpuZone(cmd, "Draw");
 
         VkClearValue colorClearValue {}, depthClearValue {};
         VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
@@ -1426,11 +1419,11 @@ void draw()
         imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 
-        vkCmdBeginRenderingKHR(cmd, &renderingInfo);
+        vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
         drawModel(cmd);
         drawSkybox(cmd);
         drawUI(cmd);
-        vkCmdEndRenderingKHR(cmd);
+        vkCmdEndRenderingKHR(cmd.commandBuffer);
 
         imageBarrier.srcStageMask = StageFlags::ColorAttachment;
         imageBarrier.dstStageMask = StageFlags::ColorAttachment; // make render semaphore wait
@@ -1440,14 +1433,10 @@ void draw()
         imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
     }
-    TracyVkCollect(tracyContext, cmd);
-    vkVerify(vkEndCommandBuffer(cmd));
 
-    VkCommandBufferSubmitInfoKHR cmdSubmitInfo = initCommandBufferSubmitInfo(cmd);
     VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR);
     VkSemaphoreSubmitInfoKHR signalSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.renderFinishedSemaphore, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR);
-    VkSubmitInfo2 submitInfo = initSubmitInfo(&cmdSubmitInfo, &waitSemaphoreSubmitInfo, &signalSemaphoreSubmitInfo);
-    vkVerify(vkQueueSubmit2KHR(graphicsQueue, 1, &submitInfo, frame.renderFinishedFence));
+    endAndSubmitOneTimeCmd(cmd, graphicsQueue, &waitSemaphoreSubmitInfo, &signalSemaphoreSubmitInfo, frame.renderFinishedFence);
 
     VkPresentInfoKHR presentInfo = initPresentInfo(&swapchain, &frame.renderFinishedSemaphore, &swapchainImageIndex);
     result = vkQueuePresentKHR(graphicsQueue, &presentInfo);

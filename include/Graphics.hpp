@@ -64,6 +64,8 @@ GpuImage createGpuImage2D(VkFormat format,
     VkImageUsageFlags usageFlags,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
+void setGpuImageName(GpuImage &gpuImage, const char *name);
+
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily);
@@ -157,6 +159,8 @@ void pipelineBarrier(VkCommandBuffer cmd,
     uint32_t imageBarrierCount);
 
 void beginOneTimeCmd(Cmd cmd);
+
+void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, VkFence fence);
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 

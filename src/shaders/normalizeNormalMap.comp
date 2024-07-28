@@ -1,0 +1,16 @@
+layout(local_size_x_id = 0, local_size_y_id = 0) in;
+
+layout(set = 0, binding = 1, rgba8) uniform restrict image2D image;
+
+void main()
+{
+    ivec2 imgSize = imageSize(image);
+    ivec2 imgCoords = ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(imgCoords, imgSize)))
+        return;
+
+    vec4 normal = imageLoad(image, imgCoords);
+    normal.rgb = normalize(normal.rgb * 2.f - 1.f);
+    normal.rgb = 0.5f * (normal.rgb + 1.f);
+    imageStore(image, imgCoords, normal);
+}

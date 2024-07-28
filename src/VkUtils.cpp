@@ -1,5 +1,25 @@
 #include "VkUtils.hpp"
 
+VkDebugUtilsLabelEXT initDebugUtilsLabelEXT(const char *label)
+{
+    VkDebugUtilsLabelEXT debugLabel {};
+    debugLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    debugLabel.pLabelName = label;
+
+    return debugLabel;
+}
+
+VkDebugUtilsObjectNameInfoEXT initDebugUtilsObjectNameInfoEXT(VkObjectType objectType, void *objectHandle, const char *objectName)
+{
+    VkDebugUtilsObjectNameInfoEXT objectNameInfo {};
+    objectNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    objectNameInfo.objectType = objectType;
+    objectNameInfo.objectHandle = (uint64_t)objectHandle;
+    objectNameInfo.pObjectName = objectName;
+
+    return objectNameInfo;
+}
+
 VkFenceCreateInfo initFenceCreateInfo(VkFenceCreateFlags flags)
 {
     VkFenceCreateInfo fenceCreateInfo {};

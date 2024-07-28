@@ -7,6 +7,10 @@
 #define vkAssert(expr) ASSERT((expr) == VK_SUCCESS)
 #define vkVerify(expr) VERIFY((expr) == VK_SUCCESS)
 
+VkDebugUtilsLabelEXT initDebugUtilsLabelEXT(const char *label);
+
+VkDebugUtilsObjectNameInfoEXT initDebugUtilsObjectNameInfoEXT(VkObjectType objectType, void *objectHandle, const char *objectName);
+
 VkFenceCreateInfo initFenceCreateInfo(VkFenceCreateFlags flags = 0);
 
 VkSemaphoreCreateInfo initSemaphoreCreateInfo();

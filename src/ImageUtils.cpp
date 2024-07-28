@@ -16,9 +16,6 @@
 #define STBI_ONLY_HDR
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-#define TRACY_VK_USE_SYMBOL_TABLE
-#include <tracy/Tracy.hpp>
-#include <tracy/TracyVulkan.hpp>
 
 #define MIPS_BLIT
 
@@ -26,7 +23,6 @@ extern VkPhysicalDeviceProperties physicalDeviceProperties;
 extern VkDevice device;
 extern VkDescriptorPool descriptorPool;
 extern VmaAllocator allocator;
-extern TracyVkCtx tracyContext;
 
 extern VkQueue graphicsQueue;
 extern VkQueue computeQueue;
@@ -38,6 +34,8 @@ static VkPipeline computeSkyboxPipeline;
 static VkPipeline computeBrdfLutPipeline;
 static VkPipeline computeIrradianceMapPipeline;
 static VkPipeline computePrefilteredMapPipeline;
+static VkPipeline normalizeNormalMapPipeline;
+
 static VkDescriptorSetLayout commonDescriptorSetLayout;
 static VkDescriptorSet commonDescriptorSet;
 static VkSampler linearClampSampler;
@@ -48,33 +46,35 @@ static constexpr uint16_t irradianceMapFaceSize = 32;
 static constexpr uint16_t prefilteredMapFaceSize = 128;
 static constexpr uint32_t prefilteredMapLevelCount = MAX_PREFILTERED_MAP_LOD + 1;
 
-static uint32_t computeSkyboxWorkGroupSize, computeSkyboxWorkGroupCount;
-static uint32_t computeBrdfLutWorkGroupSize, computeBrdfLutWorkGroupCount;
-static uint32_t computeIrradianceMapWorkGroupSize, computeIrradianceMapWorkGroupCount;
-static uint32_t computePrefilteredMapWorkGroupSize, computePrefilteredMapWorkGroupCount;
+static uint32_t maxWorkGroupSize2d = 0;
 
 static constexpr float defaultCompressionQuality = 0.1f;
 static void *optionsBC5;
 static void *optionsBC6;
 static void *optionsBC7;
 
-static void pickBestWorkGroupSize2d(uint32_t workSize, uint32_t &workGroupSize, uint32_t &workGroupCount)
+static inline void findMaxWorkGroupSize2d()
 {
-    static uint32_t maxWorkGroupSize = 0;
+    maxWorkGroupSize2d = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
+    uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
 
-    if (!maxWorkGroupSize)
+    while (maxInvocations < maxWorkGroupSize2d * maxWorkGroupSize2d)
     {
-        maxWorkGroupSize = min(physicalDeviceProperties.limits.maxComputeWorkGroupSize[0], physicalDeviceProperties.limits.maxComputeWorkGroupSize[1]);
-        uint32_t maxInvocations = physicalDeviceProperties.limits.maxComputeWorkGroupInvocations;
-
-        while (maxInvocations < maxWorkGroupSize * maxWorkGroupSize)
-        {
-            maxWorkGroupSize /= 2;
-        }
+        maxWorkGroupSize2d /= 2;
     }
+}
 
-    workGroupSize = min(workSize, maxWorkGroupSize);
-    workGroupCount = (workSize + workGroupSize - 1) / workGroupSize;
+static inline uint32_t findBestWorkGroupSize2d(uint32_t workSize)
+{
+    ASSERT(maxWorkGroupSize2d);
+    return min(workSize, maxWorkGroupSize2d);
+}
+
+static inline uint32_t findBestWorkGroupCount2d(uint32_t workSize)
+{
+    ASSERT(maxWorkGroupSize2d);
+    uint32_t workGroupSize = findBestWorkGroupSize2d(workSize);
+    return (workSize + workGroupSize - 1) / workGroupSize;
 }
 
 static inline uint8_t calcMipLevelCount(uint16_t width, uint16_t height)
@@ -82,30 +82,29 @@ static inline uint8_t calcMipLevelCount(uint16_t width, uint16_t height)
     return (uint8_t)(log2f((float)max(width, height))) + 1;
 }
 
-void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdfLutShaderPath, const char *computeIrradianceMapShaderPath, const char *computePrefilteredMapShaderPath)
+void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdfLutShaderPath, const char *computeIrradianceMapShaderPath, const char *computePrefilteredMapShaderPath, const char *normalizeNormalMapShaderPath)
 {
     ASSERT(isValidString(computeSkyboxShaderPath));
+    ASSERT(isValidString(computeBrdfLutShaderPath));
     ASSERT(isValidString(computeIrradianceMapShaderPath));
     ASSERT(isValidString(computePrefilteredMapShaderPath));
+    ASSERT(isValidString(normalizeNormalMapShaderPath));
     ASSERT(calcMipLevelCount(prefilteredMapFaceSize, prefilteredMapFaceSize) >= prefilteredMapLevelCount);
 
-    pickBestWorkGroupSize2d(skyboxFaceSize, computeSkyboxWorkGroupSize, computeSkyboxWorkGroupCount);
-    pickBestWorkGroupSize2d(brdfLutSize, computeBrdfLutWorkGroupSize, computeBrdfLutWorkGroupCount);
-    pickBestWorkGroupSize2d(irradianceMapFaceSize, computeIrradianceMapWorkGroupSize, computeIrradianceMapWorkGroupCount);
-    pickBestWorkGroupSize2d(prefilteredMapFaceSize, computePrefilteredMapWorkGroupSize, computePrefilteredMapWorkGroupCount);
+    findMaxWorkGroupSize2d();
 
     VkSamplerCreateInfo samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
 
+    // one set to rule them all
     VkDescriptorSetLayoutBinding setBindings[]
     {
         {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // hdri equirect
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // skybox write
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // skybox write | brdf lut | normal map
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // skybox read
-        {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // brdf lut
-        {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // irradiance
-        {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, prefilteredMapLevelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // prefiltered
-        {6, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // irradiance
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, prefilteredMapLevelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // prefiltered normalMapImage array
+        {5, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
     };
     VkDescriptorBindingFlags bindingFlags[COUNTOF(setBindings)] {};
     bindingFlags[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
@@ -121,6 +120,11 @@ void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdf
     VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&commonDescriptorSetLayout, 1, &range, 1);
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &commonPipelineLayout));
 
+    uint32_t computeSkyboxWorkGroupSize = findBestWorkGroupSize2d(skyboxFaceSize);
+    uint32_t computeBrdfLutWorkGroupSize = findBestWorkGroupSize2d(brdfLutSize);
+    uint32_t computeIrradianceMapWorkGroupSize = findBestWorkGroupSize2d(irradianceMapFaceSize);
+    uint32_t computePrefilteredMapWorkGroupSize = findBestWorkGroupSize2d(prefilteredMapFaceSize);
+
     VkSpecializationMapEntry specEntry { 0, 0, sizeof(uint32_t) };
     VkSpecializationInfo specInfos[]
     {
@@ -128,27 +132,31 @@ void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdf
         { 1, &specEntry, sizeof(uint32_t), &computeBrdfLutWorkGroupSize },
         { 1, &specEntry, sizeof(uint32_t), &computeIrradianceMapWorkGroupSize },
         { 1, &specEntry, sizeof(uint32_t), &computePrefilteredMapWorkGroupSize },
+        { 1, &specEntry, sizeof(uint32_t), &maxWorkGroupSize2d },
     };
     VkShaderModule shaderModules[]
     {
         createShaderModuleFromSpv(device, computeSkyboxShaderPath),
         createShaderModuleFromSpv(device, computeBrdfLutShaderPath),
         createShaderModuleFromSpv(device, computeIrradianceMapShaderPath),
-        createShaderModuleFromSpv(device, computePrefilteredMapShaderPath)
+        createShaderModuleFromSpv(device, computePrefilteredMapShaderPath),
+        createShaderModuleFromSpv(device, normalizeNormalMapShaderPath)
     };
     VkPipelineShaderStageCreateInfo shaderStageCreateInfos[]
     {
         initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[0], &specInfos[0]),
         initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[1], &specInfos[1]),
         initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[2], &specInfos[2]),
-        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[3], &specInfos[3])
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[3], &specInfos[3]),
+        initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, shaderModules[4], &specInfos[4])
     };
     VkComputePipelineCreateInfo computePipelineCreateInfos[]
     {
         initComputePipelineCreateInfo(shaderStageCreateInfos[0], commonPipelineLayout),
         initComputePipelineCreateInfo(shaderStageCreateInfos[1], commonPipelineLayout),
         initComputePipelineCreateInfo(shaderStageCreateInfos[2], commonPipelineLayout),
-        initComputePipelineCreateInfo(shaderStageCreateInfos[3], commonPipelineLayout)
+        initComputePipelineCreateInfo(shaderStageCreateInfos[3], commonPipelineLayout),
+        initComputePipelineCreateInfo(shaderStageCreateInfos[4], commonPipelineLayout)
     };
     VkPipeline pipelines[COUNTOF(computePipelineCreateInfos)];
     vkVerify(vkCreateComputePipelines(device, nullptr, COUNTOF(computePipelineCreateInfos), computePipelineCreateInfos, nullptr, pipelines));
@@ -156,6 +164,7 @@ void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdf
     computeBrdfLutPipeline = pipelines[1];
     computeIrradianceMapPipeline = pipelines[2];
     computePrefilteredMapPipeline = pipelines[3];
+    normalizeNormalMapPipeline = pipelines[4];
 
     for (uint8_t i = 0; i < COUNTOF(shaderModules); i++)
     {
@@ -179,13 +188,16 @@ void terminateImageUtils()
     vkDestroyPipeline(device, computeBrdfLutPipeline, nullptr);
     vkDestroyPipeline(device, computeIrradianceMapPipeline, nullptr);
     vkDestroyPipeline(device, computePrefilteredMapPipeline, nullptr);
+    vkDestroyPipeline(device, normalizeNormalMapPipeline, nullptr);
 
     DestroyOptionsBC5(optionsBC5);
     DestroyOptionsBC5(optionsBC6);
     DestroyOptionsBC5(optionsBC7);
 }
 
-Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
+static void normalizeNormalMap(Image &image);
+
+static Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
 {
     ZoneScoped;
     ASSERT(data);
@@ -225,10 +237,23 @@ Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose)
     image.faceCount = 1;
     image.levelCount = 1;
 
+    if (image.purpose == ImagePurpose::Normal)
+        normalizeNormalMap(image);
+
     return image;
 }
 
-Image importImage(const char *inImageFilename, ImagePurpose purpose)
+void importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose, const char *outImageFilename)
+{
+    ZoneScoped;
+    ASSERT(isValidString(outImageFilename));
+    ZoneText(outImageFilename, strlen(outImageFilename));
+    Image image = importImage(data, dataSize, purpose);
+    writeImage(image, outImageFilename, GenerateMips::Yes, Compress::Yes);
+    freeImage(image);
+}
+
+static Image importImage(const char *inImageFilename, ImagePurpose purpose)
 {
     ZoneScoped;
     ASSERT(isValidString(inImageFilename));
@@ -239,6 +264,18 @@ Image importImage(const char *inImageFilename, ImagePurpose purpose)
     Image image = importImage(data, dataSize, purpose);
     delete[] data;
     return image;
+}
+
+void importImage(const char *inImageFilename, const char *outImageFilename, ImagePurpose purpose)
+{
+    ZoneScoped;
+    ASSERT(isValidString(inImageFilename));
+    ASSERT(isValidString(outImageFilename));
+    ZoneText(inImageFilename, strlen(inImageFilename));
+    ZoneText(outImageFilename, strlen(outImageFilename));
+    Image image = importImage(inImageFilename, purpose);
+    writeImage(image, outImageFilename, GenerateMips::Yes, Compress::Yes);
+    freeImage(image);
 }
 
 static uint8_t getTexelSize(const Image &image)
@@ -744,10 +781,9 @@ static void generateImageMips(Image &image)
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
     beginOneTimeCmd(graphicsCmd);
     {
-        TracyVkZone(tracyContext, graphicsCmd.commandBuffer, "Mips Blit");
+        ScopedGpuZone(graphicsCmd, "Mips Blit");
         generateMipsBlit(graphicsCmd, gpuImage);
     }
-    TracyVkCollect(tracyContext, graphicsCmd.commandBuffer);
     endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
     freeCmd(graphicsCmd);
 #else
@@ -842,22 +878,48 @@ Image loadImage(const char *inImageFilename)
     return image;
 }
 
-void importImage(const char *inImageFilename, const char *outImageFilename, ImagePurpose purpose)
-{
-    ZoneScoped;
-    ASSERT(isValidString(inImageFilename));
-    ASSERT(isValidString(outImageFilename));
-    ZoneText(inImageFilename, strlen(inImageFilename));
-    ZoneText(outImageFilename, strlen(outImageFilename));
-    Image image = importImage(inImageFilename, purpose);
-    writeImage(image, outImageFilename, GenerateMips::Yes, Compress::Yes);
-    freeImage(image);
-}
-
 void freeImage(Image &image)
 {
     free(image.data);
     image = {};
+}
+
+static void normalizeNormalMap(Image &normalMapImage)
+{
+    ZoneScoped;
+    ASSERT(normalMapImage.data && normalMapImage.dataSize);
+    ASSERT(normalMapImage.format == VK_FORMAT_R8G8B8A8_UNORM);
+    ASSERT(normalMapImage.purpose == ImagePurpose::Normal);
+
+    GpuImage normalMapGpuImage = createAndUploadGpuImage2D(normalMapImage, QueueFamily::Compute, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    setGpuImageName(normalMapGpuImage, NAMEOF(normalMapGpuImage));
+    VkDescriptorImageInfo imageInfo { nullptr, normalMapGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+    uint32_t workGroupCount = findBestWorkGroupCount2d(max(normalMapImage.width, normalMapImage.height));
+    Cmd computeCmd = allocateCmd(computeCommandPool);
+    beginOneTimeCmd(computeCmd);
+    {
+        ScopedGpuZone(computeCmd, "Normalize normal map");
+        ImageBarrier imageBarrier {};
+        imageBarrier.image = normalMapGpuImage.image;
+        imageBarrier.srcStageMask = StageFlags::None;
+        imageBarrier.dstStageMask = StageFlags::ComputeShader;
+        imageBarrier.srcAccessMask = AccessFlags::None;
+        imageBarrier.dstAccessMask = AccessFlags::Read;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        pipelineBarrier(computeCmd, nullptr, 0, &imageBarrier, 1);
+        vkCmdBindDescriptorSets(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
+        vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, normalizeNormalMapPipeline);
+        vkCmdDispatch(computeCmd.commandBuffer, workGroupCount, workGroupCount, 1);
+    }
+    endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, WaitForFence::Yes);
+    freeCmd(computeCmd);
+
+    copyImage(normalMapGpuImage, normalMapImage, QueueFamily::Compute);
+    destroyGpuImage(normalMapGpuImage);
 }
 
 void computeBrdfLut(const char *brdfLutPath)
@@ -867,15 +929,16 @@ void computeBrdfLut(const char *brdfLutPath)
     GpuImage brdfLutGpuImage = createGpuImage2D(VK_FORMAT_R16G16B16A16_SFLOAT,
         { brdfLutSize, brdfLutSize }, 1,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-
+    setGpuImageName(brdfLutGpuImage, NAMEOF(brdfLutGpuImage));
     VkDescriptorImageInfo imageInfo { nullptr, brdfLutGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
-    VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 3, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
+    VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
+    uint32_t computeBrdfLutWorkGroupCount = findBestWorkGroupCount2d(brdfLutSize);
     Cmd computeCmd = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd);
     {
-        TracyVkZone(tracyContext, computeCmd.commandBuffer, "Compute BRDF LUT");
+        ScopedGpuZone(computeCmd, "Compute BRDF LUT");
         ImageBarrier imageBarrier {};
         imageBarrier.image = brdfLutGpuImage.image;
         imageBarrier.srcStageMask = StageFlags::None;
@@ -889,7 +952,6 @@ void computeBrdfLut(const char *brdfLutPath)
         vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeBrdfLutPipeline);
         vkCmdDispatch(computeCmd.commandBuffer, computeBrdfLutWorkGroupCount, computeBrdfLutWorkGroupCount, 1);
     }
-    TracyVkCollect(tracyContext, computeCmd.commandBuffer);
     endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, WaitForFence::Yes);
     freeCmd(computeCmd);
 
@@ -912,6 +974,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
 
     Image image = importImage(hdriPath, ImagePurpose::HDRI);
     GpuImage hdriGpuImage = createAndUploadGpuImage2D(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
+    setGpuImageName(hdriGpuImage, NAMEOF(hdriGpuImage));
     freeImage(image);
 
     uint8_t skyboxLevelCount = calcMipLevelCount(skyboxFaceSize, skyboxFaceSize);
@@ -919,14 +982,17 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         { skyboxFaceSize, skyboxFaceSize }, skyboxLevelCount,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         Cubemap::Yes);
+    setGpuImageName(skyboxGpuImage, NAMEOF(skyboxGpuImage));
     GpuImage irradianceMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
         { irradianceMapFaceSize, irradianceMapFaceSize }, 1,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         Cubemap::Yes);
+    setGpuImageName(irradianceMapGpuImage, NAMEOF(irradianceMapGpuImage));
     GpuImage prefilteredMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
         { prefilteredMapFaceSize, prefilteredMapFaceSize }, prefilteredMapLevelCount,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         Cubemap::Yes);
+    setGpuImageName(prefilteredMapGpuImage, NAMEOF(prefilteredMapGpuImage));
 
     VkDescriptorImageInfo imageInfos[4 + prefilteredMapLevelCount]
     {
@@ -952,8 +1018,8 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         initWriteDescriptorSetImage(commonDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 0),
         initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 1),
         initWriteDescriptorSetImage(commonDescriptorSet, 2, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos + 2),
-        initWriteDescriptorSetImage(commonDescriptorSet, 4, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 3),
-        initWriteDescriptorSetImage(commonDescriptorSet, 5, prefilteredMapLevelCount, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 4)
+        initWriteDescriptorSetImage(commonDescriptorSet, 3, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 3),
+        initWriteDescriptorSetImage(commonDescriptorSet, 4, prefilteredMapLevelCount, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 4)
     };
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 
@@ -963,10 +1029,14 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
     ImageBarrier imageBarriers[3] {};
 
+    uint32_t computeSkyboxWorkGroupCount = findBestWorkGroupCount2d(skyboxFaceSize);
+    uint32_t computeIrradianceMapWorkGroupCount = findBestWorkGroupCount2d(irradianceMapFaceSize);
+    uint32_t computePrefilteredMapWorkGroupCount = findBestWorkGroupCount2d(prefilteredMapFaceSize);
+
     Cmd computeCmd1 = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd1);
     {
-        TracyVkZone(tracyContext, computeCmd1.commandBuffer, "Compute skybox");
+        ScopedGpuZone(computeCmd1, "Compute skybox");
         imageBarriers[0].image = skyboxGpuImage.image;
         imageBarriers[0].srcStageMask = StageFlags::None;
         imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
@@ -978,7 +1048,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[1].image = irradianceMapGpuImage.image;
         imageBarriers[2] = imageBarriers[0];
         imageBarriers[2].image = prefilteredMapGpuImage.image;
-        pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 2);
+        pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 3);
         vkCmdBindDescriptorSets(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
         vkCmdBindPipeline(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeSkyboxPipeline);
         vkCmdDispatch(computeCmd1.commandBuffer, computeSkyboxWorkGroupCount, computeSkyboxWorkGroupCount, 1);
@@ -992,13 +1062,12 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].dstQueueFamily = QueueFamily::Graphics;
         pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 1);
     }
-    TracyVkCollect(tracyContext, computeCmd1.commandBuffer);
     endAndSubmitOneTimeCmd(computeCmd1, computeQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
 
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
     beginOneTimeCmd(graphicsCmd);
     {
-        TracyVkZone(tracyContext, graphicsCmd.commandBuffer, "Mips blit");
+        ScopedGpuZone(graphicsCmd, "Mips blit");
         imageBarriers[0] = {};
         imageBarriers[0].image = skyboxGpuImage.image;
         imageBarriers[0].dstStageMask = StageFlags::Blit;
@@ -1017,13 +1086,12 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].dstQueueFamily = QueueFamily::Compute;
         pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
     }
-    TracyVkCollect(tracyContext, graphicsCmd.commandBuffer);
     endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, &ownershipReleaseFinishedInfo, &ownershipReleaseFinishedInfo, WaitForFence::No);
 
     Cmd computeCmd2 = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd2);
     {
-        TracyVkZone(tracyContext, computeCmd2.commandBuffer, "Compute irradiance");
+        ScopedGpuZone(computeCmd2, "Compute irradiance");
         imageBarriers[0] = {};
         imageBarriers[0].image = skyboxGpuImage.image;
         imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
@@ -1036,12 +1104,11 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         vkCmdDispatch(computeCmd2.commandBuffer, computeIrradianceMapWorkGroupCount * 6, computeIrradianceMapWorkGroupCount, 1);
     }
     {
-        TracyVkZone(tracyContext, computeCmd2.commandBuffer, "Compute prefiltered");
+        ScopedGpuZone(computeCmd2, "Compute prefiltered");
         vkCmdBindPipeline(computeCmd2.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePrefilteredMapPipeline);
         vkCmdPushConstants(computeCmd2.commandBuffer, commonPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(prefilteredMapLevelCount), &prefilteredMapLevelCount);
         vkCmdDispatch(computeCmd2.commandBuffer, computePrefilteredMapWorkGroupCount * 6, computePrefilteredMapWorkGroupCount, 1);
     }
-    TracyVkCollect(tracyContext, computeCmd2.commandBuffer);
     endAndSubmitOneTimeCmd(computeCmd2, computeQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
 
     image.purpose = ImagePurpose::HDRI;

@@ -16,9 +16,7 @@ static void importImage(const cgltf_image *image, const char *path, ImagePurpose
 {
     uint8_t *data = (uint8_t *)image->buffer_view->buffer->data + image->buffer_view->offset;
     uint32_t dataSize = (uint32_t)image->buffer_view->size;
-    Image img = importImage(data, dataSize, purpose);
-    writeImage(img, path, GenerateMips::Yes, Compress::Yes);
-    freeImage(img);
+    importImage(data, dataSize, purpose, path);
 }
 
 static void importMaterials(const cgltf_data *data, Scene &scene, const char *sceneDirPath)

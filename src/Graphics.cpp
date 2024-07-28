@@ -3,10 +3,10 @@
        printf((format), __VA_ARGS__); \
        printf("\n"); \
    } while(false)
+
+#include "DebugUtils.hpp"
 #include "Graphics.hpp"
 #include "VkUtils.hpp"
-
-#include <tracy/Tracy.hpp>
 
 extern VkInstance instance;
 extern VkPhysicalDevice physicalDevice;
@@ -151,6 +151,12 @@ GpuImage createGpuImage2D(VkFormat format, VkExtent2D extent, uint8_t mipLevels,
     vkVerify(vkCreateImageView(allocatorInfo.device, &imageViewCreateInfo, nullptr, &image.imageView));
 
     return image;
+}
+
+void setGpuImageName(GpuImage &gpuImage, const char *name)
+{
+    VkDebugUtilsObjectNameInfoEXT objectNameInfo = initDebugUtilsObjectNameInfoEXT(VK_OBJECT_TYPE_IMAGE, gpuImage.image, name);
+    vkSetDebugUtilsObjectNameEXT(device, &objectNameInfo);
 }
 
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout)
@@ -369,6 +375,14 @@ void beginOneTimeCmd(Cmd cmd)
     vkVerify(vkBeginCommandBuffer(cmd.commandBuffer, &commandBufferBeginInfo));
 }
 
+void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, VkFence fence)
+{
+    vkVerify(vkEndCommandBuffer(cmd.commandBuffer));
+    VkCommandBufferSubmitInfoKHR cmdSubmitInfo = initCommandBufferSubmitInfo(cmd.commandBuffer);
+    VkSubmitInfo2 submitInfo = initSubmitInfo(&cmdSubmitInfo, waitSemaphoreSubmitInfo, signalSemaphoreSubmitInfo);
+    vkVerify(vkQueueSubmit2KHR(queue, 1, &submitInfo, fence));
+}
+
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence)
 {
     VkFence fence = nullptr;
@@ -379,10 +393,7 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
         vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &fence));
     }
 
-    vkVerify(vkEndCommandBuffer(cmd.commandBuffer));
-    VkCommandBufferSubmitInfoKHR cmdSubmitInfo = initCommandBufferSubmitInfo(cmd.commandBuffer);
-    VkSubmitInfo2 submitInfo = initSubmitInfo(&cmdSubmitInfo, waitSemaphoreSubmitInfo, signalSemaphoreSubmitInfo);
-    vkVerify(vkQueueSubmit2KHR(queue, 1, &submitInfo, fence));
+    endAndSubmitOneTimeCmd(cmd, queue, waitSemaphoreSubmitInfo, signalSemaphoreSubmitInfo, fence);
 
     if (waitForFence == WaitForFence::Yes)
     {
@@ -540,7 +551,7 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
     imageBarrier.srcStageMask = StageFlags::Copy;
     imageBarrier.srcAccessMask = AccessFlags::Write;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageBarrier.newLayout = dstLayout;
     imageBarrier.srcQueueFamily = QueueFamily::Transfer;
     imageBarrier.dstQueueFamily = dstQueueFamily;
     pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);

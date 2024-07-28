@@ -6,18 +6,6 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(MSVC)
-    add_compile_options(
-        /W4
-        $<$<NOT:$<CONFIG:DEBUG>>:/WX>
-        /external:I ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
-        /external:W0
-        /external:templates-
-    )
-else()
-    # TODO
-endif()
-
 add_executable(cutter)
 
 target_sources(cutter PRIVATE
@@ -69,6 +57,7 @@ target_include_directories(cutter PRIVATE
 )
 
 target_compile_definitions(cutter PRIVATE
+    $<$<CONFIG:DEBUG>:DEBUG>
     ENABLE_COMPRESSION
     VK_NO_PROTOTYPES
     TRACY_ENABLE
@@ -82,8 +71,24 @@ if(WIN32)
         VK_USE_PLATFORM_WIN32_KHR
     )
 
+    target_compile_options(cutter PRIVATE
+        $<$<NOT:$<CONFIG:DEBUG>>:/Zi>
+        /W4
+        $<$<NOT:$<CONFIG:DEBUG>>:/WX>
+        /external:I ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
+        /external:W0
+        /external:templates-
+    )
+
     target_link_options(cutter PRIVATE
-        $<$<NOT:$<CONFIG:DEBUG>>:/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup>
+        $<$<NOT:$<CONFIG:DEBUG>>:
+            /SUBSYSTEM:WINDOWS
+            /ENTRY:mainCRTStartup
+            /INCREMENTAL:NO
+            /DEBUG:FULL
+            /OPT:REF
+            /OPT:ICF
+        >
     )
 
     target_link_libraries(cutter PRIVATE

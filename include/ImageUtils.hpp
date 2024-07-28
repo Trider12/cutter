@@ -29,13 +29,15 @@ static_assert(sizeof(Image) == 24, "");
 EnumBool(GenerateMips);
 EnumBool(Compress);
 
-void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdfLutShaderPath, const char *computeIrradianceMapShaderPath, const char *computePrefilteredMapShaderPath);
+void initImageUtils(const char *computeSkyboxShaderPath,
+    const char *computeBrdfLutShaderPath,
+    const char *computeIrradianceMapShaderPath,
+    const char *computePrefilteredMapShaderPath,
+    const char *normalizeNormalMapShaderPath);
 
 void terminateImageUtils();
 
-Image importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose);
-
-Image importImage(const char *inImageFilename, ImagePurpose purpose);
+void importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose, const char *outImageFilename);
 
 void importImage(const char *inImageFilename, const char *outImageFilename, ImagePurpose purpose);
 
