@@ -1,17 +1,17 @@
-#include "globalDescriptorSet.h"
-
-layout(std430, set = 1, binding = 0) restrict readonly buffer SkyboxPositionsBlock
-{
-    Position skyboxPositions[];
-};
+#include "common.h"
 
 layout(location = 0) out vec3 outPos;
 
+layout(std430, set = 1, binding = 0) uniform CameraBlock
+{
+    CameraData cameraData;
+};
+
 void main()
 {
-    outPos = vec3(skyboxPositions[gl_VertexIndex].x, skyboxPositions[gl_VertexIndex].y, skyboxPositions[gl_VertexIndex].z);
-    mat4 viewProj = cameraData.projMat * mat4(mat3(cameraData.viewMat));
-    vec4 pos = viewProj * vec4(outPos, 1.f);
-    pos.z = 0.f;
+    vec4 pos = vec4(((gl_VertexIndex << 2) & 4) - 1, ((gl_VertexIndex << 1) & 4) - 1, 0.f, 1.f);
+    mat4 invProjMat = inverse(cameraData.projMat);
+    mat3 invViewMat = transpose(mat3(cameraData.viewMat));
+    outPos = invViewMat * (invProjMat * pos).xyz;
     gl_Position = pos;
 }

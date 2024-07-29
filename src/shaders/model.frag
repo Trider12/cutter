@@ -1,5 +1,5 @@
 #include "fragmentUtils.h"
-#include "globalDescriptorSet.h"
+#include "modelDescriptorSet.h"
 #include "pbr.h"
 
 struct VsOut

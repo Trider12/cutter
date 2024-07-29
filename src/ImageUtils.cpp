@@ -250,7 +250,7 @@ void importImage(const uint8_t *data, uint32_t dataSize, ImagePurpose purpose, c
     ZoneText(outImageFilename, strlen(outImageFilename));
     Image image = importImage(data, dataSize, purpose);
     writeImage(image, outImageFilename, GenerateMips::Yes, Compress::Yes);
-    freeImage(image);
+    destroyImage(image);
 }
 
 static Image importImage(const char *inImageFilename, ImagePurpose purpose)
@@ -275,7 +275,7 @@ void importImage(const char *inImageFilename, const char *outImageFilename, Imag
     ZoneText(outImageFilename, strlen(outImageFilename));
     Image image = importImage(inImageFilename, purpose);
     writeImage(image, outImageFilename, GenerateMips::Yes, Compress::Yes);
-    freeImage(image);
+    destroyImage(image);
 }
 
 static uint8_t getTexelSize(const Image &image)
@@ -681,7 +681,7 @@ uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, vo
 static void generateMipsBlit(Cmd cmd, GpuImage &gpuImage)
 {
     ImageBarrier imageBarriers[2] {};
-    imageBarriers[0].image = gpuImage.image;
+    imageBarriers[0].image = gpuImage;
     imageBarriers[0].srcStageMask = StageFlags::Blit;
     imageBarriers[0].dstStageMask = StageFlags::Blit;
     imageBarriers[0].srcAccessMask = AccessFlags::Write;
@@ -700,8 +700,8 @@ static void generateMipsBlit(Cmd cmd, GpuImage &gpuImage)
     blit.dstSubresource.baseArrayLayer = 0;
     blit.dstSubresource.layerCount = gpuImage.layerCount;
 
-    int32_t mipWidth = gpuImage.imageExtent.width;
-    int32_t mipHeight = gpuImage.imageExtent.height;
+    int32_t mipWidth = gpuImage.extent.width;
+    int32_t mipHeight = gpuImage.extent.height;
 
     for (uint8_t i = 1; i < gpuImage.levelCount; i++)
     {
@@ -729,7 +729,7 @@ static void generateMipsBlit(Cmd cmd, GpuImage &gpuImage)
     }
 
     imageBarriers[0].baseMipLevel = gpuImage.levelCount - 1;
-    imageBarriers[1].image = gpuImage.image;
+    imageBarriers[1].image = gpuImage;
     imageBarriers[1].srcStageMask = StageFlags::Blit;
     imageBarriers[1].dstStageMask = StageFlags::None;
     imageBarriers[1].srcAccessMask = AccessFlags::Write;
@@ -770,12 +770,7 @@ static void generateImageMips(Image &image)
     queueFamily = QueueFamily::Compute;
     imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 #endif
-    GpuImage gpuImage;
-
-    if (image.faceCount == 1)
-        gpuImage = createAndUploadGpuImage2D(image, queueFamily, usageFlags, imageLayout);
-    else
-        gpuImage = createAndUploadGpuImage2DArray(image, queueFamily, usageFlags, Cubemap::No, imageLayout);
+    GpuImage gpuImage = createAndCopyGpuImage(image, queueFamily, usageFlags, image.faceCount == 1 ? GpuImageType::Image2D : GpuImageType::Image2DCubemap, imageLayout);
 
 #ifdef MIPS_BLIT
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
@@ -843,7 +838,7 @@ void writeImage(Image &image, const char *outImageFilename, GenerateMips generat
     writeFile(outImageFilename, fileData, (uint32_t)fileDataSize);
     free(fileData);
 
-    freeImage(compressedImage);
+    destroyImage(compressedImage);
 }
 
 Image loadImage(const char *inImageFilename)
@@ -878,7 +873,7 @@ Image loadImage(const char *inImageFilename)
     return image;
 }
 
-void freeImage(Image &image)
+void destroyImage(Image &image)
 {
     free(image.data);
     image = {};
@@ -891,7 +886,7 @@ static void normalizeNormalMap(Image &normalMapImage)
     ASSERT(normalMapImage.format == VK_FORMAT_R8G8B8A8_UNORM);
     ASSERT(normalMapImage.purpose == ImagePurpose::Normal);
 
-    GpuImage normalMapGpuImage = createAndUploadGpuImage2D(normalMapImage, QueueFamily::Compute, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    GpuImage normalMapGpuImage = createAndCopyGpuImage(normalMapImage, QueueFamily::Compute, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, GpuImageType::Image2D, VK_IMAGE_LAYOUT_GENERAL);
     setGpuImageName(normalMapGpuImage, NAMEOF(normalMapGpuImage));
     VkDescriptorImageInfo imageInfo { nullptr, normalMapGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
     VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);
@@ -903,7 +898,7 @@ static void normalizeNormalMap(Image &normalMapImage)
     {
         ScopedGpuZone(computeCmd, "Normalize normal map");
         ImageBarrier imageBarrier {};
-        imageBarrier.image = normalMapGpuImage.image;
+        imageBarrier.image = normalMapGpuImage;
         imageBarrier.srcStageMask = StageFlags::None;
         imageBarrier.dstStageMask = StageFlags::ComputeShader;
         imageBarrier.srcAccessMask = AccessFlags::None;
@@ -926,7 +921,7 @@ void computeBrdfLut(const char *brdfLutPath)
 {
     ASSERT(isValidString(brdfLutPath));
 
-    GpuImage brdfLutGpuImage = createGpuImage2D(VK_FORMAT_R16G16B16A16_SFLOAT,
+    GpuImage brdfLutGpuImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT,
         { brdfLutSize, brdfLutSize }, 1,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     setGpuImageName(brdfLutGpuImage, NAMEOF(brdfLutGpuImage));
@@ -940,7 +935,7 @@ void computeBrdfLut(const char *brdfLutPath)
     {
         ScopedGpuZone(computeCmd, "Compute BRDF LUT");
         ImageBarrier imageBarrier {};
-        imageBarrier.image = brdfLutGpuImage.image;
+        imageBarrier.image = brdfLutGpuImage;
         imageBarrier.srcStageMask = StageFlags::None;
         imageBarrier.dstStageMask = StageFlags::ComputeShader;
         imageBarrier.srcAccessMask = AccessFlags::None;
@@ -959,7 +954,7 @@ void computeBrdfLut(const char *brdfLutPath)
     image.purpose = ImagePurpose::HDRI;
     copyImage(brdfLutGpuImage, image, QueueFamily::Compute);
     writeImage(image, brdfLutPath, GenerateMips::No, Compress::Yes);
-    freeImage(image);
+    destroyImage(image);
 
     destroyGpuImage(brdfLutGpuImage);
 }
@@ -973,25 +968,25 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     ASSERT(isValidString(prefilteredMapPath));
 
     Image image = importImage(hdriPath, ImagePurpose::HDRI);
-    GpuImage hdriGpuImage = createAndUploadGpuImage2D(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
+    GpuImage hdriGpuImage = createAndCopyGpuImage(image, QueueFamily::Compute, VK_IMAGE_USAGE_SAMPLED_BIT);
     setGpuImageName(hdriGpuImage, NAMEOF(hdriGpuImage));
-    freeImage(image);
+    destroyImage(image);
 
     uint8_t skyboxLevelCount = calcMipLevelCount(skyboxFaceSize, skyboxFaceSize);
-    GpuImage skyboxGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+    GpuImage skyboxGpuImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT,
         { skyboxFaceSize, skyboxFaceSize }, skyboxLevelCount,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        Cubemap::Yes);
+        GpuImageType::Image2DCubemap);
     setGpuImageName(skyboxGpuImage, NAMEOF(skyboxGpuImage));
-    GpuImage irradianceMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+    GpuImage irradianceMapGpuImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT,
         { irradianceMapFaceSize, irradianceMapFaceSize }, 1,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        Cubemap::Yes);
+        GpuImageType::Image2DCubemap);
     setGpuImageName(irradianceMapGpuImage, NAMEOF(irradianceMapGpuImage));
-    GpuImage prefilteredMapGpuImage = createGpuImage2DArray(VK_FORMAT_R16G16B16A16_SFLOAT,
+    GpuImage prefilteredMapGpuImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT,
         { prefilteredMapFaceSize, prefilteredMapFaceSize }, prefilteredMapLevelCount,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        Cubemap::Yes);
+        GpuImageType::Image2DCubemap);
     setGpuImageName(prefilteredMapGpuImage, NAMEOF(prefilteredMapGpuImage));
 
     VkDescriptorImageInfo imageInfos[4 + prefilteredMapLevelCount]
@@ -1007,7 +1002,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     for (uint8_t i = 0; i < prefilteredMapLevelCount; i++)
     {
         VkImageSubresourceRange range = initImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, i, 1);
-        VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(prefilteredMapGpuImage.image, prefilteredMapGpuImage.imageFormat, VK_IMAGE_VIEW_TYPE_CUBE, range);
+        VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(prefilteredMapGpuImage.image, prefilteredMapGpuImage.format, VK_IMAGE_VIEW_TYPE_CUBE, range);
         vkVerify(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageViews[i]));
 
         imageInfos[4 + i] = { nullptr, imageViews[i], VK_IMAGE_LAYOUT_GENERAL };
@@ -1037,7 +1032,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     beginOneTimeCmd(computeCmd1);
     {
         ScopedGpuZone(computeCmd1, "Compute skybox");
-        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].srcStageMask = StageFlags::None;
         imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
         imageBarriers[0].srcAccessMask = AccessFlags::None;
@@ -1045,15 +1040,15 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
         imageBarriers[1] = imageBarriers[0];
-        imageBarriers[1].image = irradianceMapGpuImage.image;
+        imageBarriers[1].image = irradianceMapGpuImage;
         imageBarriers[2] = imageBarriers[0];
-        imageBarriers[2].image = prefilteredMapGpuImage.image;
+        imageBarriers[2].image = prefilteredMapGpuImage;
         pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 3);
         vkCmdBindDescriptorSets(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, commonPipelineLayout, 0, 1, &commonDescriptorSet, 0, nullptr);
         vkCmdBindPipeline(computeCmd1.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeSkyboxPipeline);
         vkCmdDispatch(computeCmd1.commandBuffer, computeSkyboxWorkGroupCount, computeSkyboxWorkGroupCount, 1);
         imageBarriers[0] = {};
-        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].srcStageMask = StageFlags::ComputeShader;
         imageBarriers[0].srcAccessMask = AccessFlags::Write;
         imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -1069,7 +1064,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     {
         ScopedGpuZone(graphicsCmd, "Mips blit");
         imageBarriers[0] = {};
-        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].dstStageMask = StageFlags::Blit;
         imageBarriers[0].dstAccessMask = AccessFlags::Read | AccessFlags::Write;
         imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -1079,7 +1074,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
         generateMipsBlit(graphicsCmd, skyboxGpuImage);
         imageBarriers[0] = {};
-        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].srcStageMask = StageFlags::Blit;
         imageBarriers[0].srcAccessMask = AccessFlags::Write;
         imageBarriers[0].srcQueueFamily = QueueFamily::Graphics;
@@ -1093,7 +1088,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     {
         ScopedGpuZone(computeCmd2, "Compute irradiance");
         imageBarriers[0] = {};
-        imageBarriers[0].image = skyboxGpuImage.image;
+        imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
         imageBarriers[0].dstAccessMask = AccessFlags::Read;
         imageBarriers[0].srcQueueFamily = QueueFamily::Graphics;
@@ -1118,7 +1113,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     writeImage(image, irradianceMapPath, GenerateMips::No, Compress::Yes);
     copyImage(prefilteredMapGpuImage, image, QueueFamily::Compute);
     writeImage(image, prefilteredMapPath, GenerateMips::No, Compress::Yes);
-    freeImage(image);
+    destroyImage(image);
 
     destroyGpuImage(hdriGpuImage);
     destroyGpuImage(skyboxGpuImage);

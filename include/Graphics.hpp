@@ -13,25 +13,6 @@ struct Cmd
     VkCommandPool commandPool;
 };
 
-struct GpuBuffer
-{
-    VkBuffer buffer;
-    VmaAllocation allocation;
-    uint32_t size;
-    void *mappedData;
-};
-
-struct GpuImage
-{
-    VkImage image;
-    VkImageView imageView;
-    VmaAllocation allocation;
-    VkExtent3D imageExtent;
-    VkFormat imageFormat;
-    uint8_t levelCount;
-    uint8_t layerCount;
-};
-
 enum class QueueFamily : uint8_t
 {
     None = 0,
@@ -40,7 +21,32 @@ enum class QueueFamily : uint8_t
     Transfer
 };
 
-EnumBool(Cubemap);
+struct GpuBuffer
+{
+    VkBuffer buffer;
+    VmaAllocation allocation;
+    uint32_t size;
+    void *mappedData;
+};
+
+enum class GpuImageType : uint8_t
+{
+    Undefined = 0,
+    Image2D,
+    Image2DCubemap
+};
+
+struct GpuImage
+{
+    VkImage image;
+    VkImageView imageView;
+    VmaAllocation allocation;
+    VkExtent3D extent;
+    VkFormat format : 32;
+    uint8_t levelCount;
+    uint8_t layerCount;
+    GpuImageType type;
+};
 
 extern VmaAllocator allocator;
 extern GpuBuffer stagingBuffer;
@@ -58,35 +64,21 @@ GpuBuffer createGpuBuffer(uint32_t size,
     VkMemoryPropertyFlags propertyFlags,
     VmaAllocationCreateFlags createFlags);
 
-GpuImage createGpuImage2D(VkFormat format,
+GpuImage createGpuImage(VkFormat format,
     VkExtent2D extent,
     uint8_t mipLevels,
     VkImageUsageFlags usageFlags,
+    GpuImageType type = GpuImageType::Image2D,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
-
-void setGpuImageName(GpuImage &gpuImage, const char *name);
 
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily);
 
-GpuImage createAndUploadGpuImage2D(const Image &image,
+GpuImage createAndCopyGpuImage(const Image &image,
     QueueFamily dstQueueFamily,
     VkImageUsageFlags usageFlags,
-    VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
-
-GpuImage createGpuImage2DArray(VkFormat format,
-    VkExtent2D extent,
-    uint8_t mipLevels,
-    VkImageUsageFlags usageFlags,
-    Cubemap cubemap,
-    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
-
-GpuImage createAndUploadGpuImage2DArray(const Image &image,
-    QueueFamily dstQueueFamily,
-    VkImageUsageFlags usageFlags,
-    Cubemap cubemap,
+    GpuImageType type = GpuImageType::Image2D,
     VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -120,7 +112,7 @@ EnumBool(WaitForFence);
 
 struct BufferBarrier
 {
-    VkBuffer buffer;
+    GpuBuffer buffer;
     StageFlags srcStageMask;
     StageFlags dstStageMask;
     AccessFlags srcAccessMask;
@@ -131,7 +123,7 @@ struct BufferBarrier
 
 struct ImageBarrier
 {
-    VkImage image;
+    GpuImage image;
     StageFlags srcStageMask;
     StageFlags dstStageMask;
     AccessFlags srcAccessMask;
@@ -164,8 +156,4 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 
-void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);
-
-void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily srcQueueFamily);
+void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);

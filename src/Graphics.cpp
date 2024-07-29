@@ -129,16 +129,34 @@ GpuBuffer createGpuBuffer(uint32_t size,
     return buffer;
 }
 
-GpuImage createGpuImage2D(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, VkImageAspectFlags aspectFlags)
+GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, GpuImageType type, VkImageAspectFlags aspectFlags)
 {
     VkExtent3D imageExtent = { extent.width, extent.height, 1 };
     GpuImage image;
-    image.imageFormat = format;
-    image.imageExtent = imageExtent;
+    image.format = format;
+    image.extent = imageExtent;
     image.levelCount = mipLevels;
     image.layerCount = 1;
+    image.type = type;
 
     VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 1, usageFlags);
+    VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+    switch (type)
+    {
+    case GpuImageType::Image2D:
+        break;
+    case GpuImageType::Image2DCubemap:
+        image.layerCount = 6;
+        imageCreateInfo.arrayLayers = 6;
+        imageCreateInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        break;
+    default:
+        ASSERT(false);
+        break;
+    }
+
     VmaAllocationCreateInfo allocationCreateInfo {};
     allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
     allocationCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -147,26 +165,23 @@ GpuImage createGpuImage2D(VkFormat format, VkExtent2D extent, uint8_t mipLevels,
     VmaAllocatorInfo allocatorInfo {};
     vmaGetAllocatorInfo(allocator, &allocatorInfo);
 
-    VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(image.image, format, VK_IMAGE_VIEW_TYPE_2D, aspectFlags);
+    VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(image.image, format, viewType, aspectFlags);
     vkVerify(vkCreateImageView(allocatorInfo.device, &imageViewCreateInfo, nullptr, &image.imageView));
 
     return image;
 }
 
-void setGpuImageName(GpuImage &gpuImage, const char *name)
-{
-    VkDebugUtilsObjectNameInfoEXT objectNameInfo = initDebugUtilsObjectNameInfoEXT(VK_OBJECT_TYPE_IMAGE, gpuImage.image, name);
-    vkSetDebugUtilsObjectNameEXT(device, &objectNameInfo);
-}
+static void copyStagingBufferToImage(GpuImage &image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily, VkImageLayout dstLayout);
+static void copyImageToStagingBuffer(const GpuImage &image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily srcQueueFamily);
 
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout)
 {
     ASSERT(srcImage.data && srcImage.dataSize);
     ASSERT(srcImage.levelCount == dstImage.levelCount);
     ASSERT(srcImage.faceCount == dstImage.layerCount);
-    ASSERT(srcImage.format == dstImage.imageFormat);
-    ASSERT(srcImage.width == dstImage.imageExtent.width);
-    ASSERT(srcImage.height == dstImage.imageExtent.height);
+    ASSERT(srcImage.format == dstImage.format);
+    ASSERT(srcImage.width == dstImage.extent.width);
+    ASSERT(srcImage.height == dstImage.extent.height);
 
     uint8_t copyRegionsCount = srcImage.faceCount * srcImage.levelCount;
     VkBufferImageCopy *copyRegions = (VkBufferImageCopy *)alloca(copyRegionsCount * sizeof(VkBufferImageCopy));
@@ -186,16 +201,16 @@ void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFa
         copyRegions[index].imageExtent = { mipWidth, mipHeight, 1 };
     }, copyRegions);
 
-    copyStagingBufferToImage(dstImage.image, copyRegions, copyRegionsCount, dstQueueFamily, dstLayout);
+    copyStagingBufferToImage(dstImage, copyRegions, copyRegionsCount, dstQueueFamily, dstLayout);
 }
 
 void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily)
 {
     dstImage.levelCount = srcImage.levelCount;
     dstImage.faceCount = srcImage.layerCount;
-    dstImage.format = srcImage.imageFormat;
-    dstImage.width = (uint16_t)srcImage.imageExtent.width;
-    dstImage.height = (uint16_t)srcImage.imageExtent.height;
+    dstImage.format = srcImage.format;
+    dstImage.width = (uint16_t)srcImage.extent.width;
+    dstImage.height = (uint16_t)srcImage.extent.height;
 
     uint8_t copyRegionsCount = dstImage.faceCount * dstImage.levelCount;
     VkBufferImageCopy *copyRegions = (VkBufferImageCopy *)alloca(copyRegionsCount * sizeof(VkBufferImageCopy));
@@ -214,50 +229,17 @@ void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFa
         copyRegions[index].imageExtent = { mipWidth, mipHeight, 1 };
     }, copyRegions);
 
-    copyImageToStagingBuffer(srcImage.image, copyRegions, copyRegionsCount, srcQueueFamily);
+    copyImageToStagingBuffer(srcImage, copyRegions, copyRegionsCount, srcQueueFamily);
 
     delete[] dstImage.data;
     dstImage.data = new uint8_t[dstImage.dataSize];
     memcpy(dstImage.data, stagingBuffer.mappedData, dstImage.dataSize);
 }
 
-GpuImage createAndUploadGpuImage2D(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
+GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, GpuImageType type, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
 {
-    ASSERT(image.faceCount == 1);
-    GpuImage gpuImage = createGpuImage2D(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, aspectFlags);
-    copyImage(image, gpuImage, dstQueueFamily, dstLayout);
-    return gpuImage;
-}
-
-GpuImage createGpuImage2DArray(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, Cubemap cubemap, VkImageAspectFlags aspectFlags)
-{
-    VkExtent3D imageExtent = { extent.width, extent.height, 1 };
-    GpuImage image;
-    image.imageFormat = format;
-    image.imageExtent = imageExtent;
-    image.levelCount = mipLevels;
-    image.layerCount = 6;
-
-    VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 6, usageFlags);
-    imageCreateInfo.flags |= cubemap == Cubemap::Yes ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
-    VmaAllocationCreateInfo allocationCreateInfo {};
-    allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    allocationCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    vkVerify(vmaCreateImage(allocator, &imageCreateInfo, &allocationCreateInfo, &image.image, &image.allocation, nullptr));
-
-    VmaAllocatorInfo allocatorInfo {};
-    vmaGetAllocatorInfo(allocator, &allocatorInfo);
-
-    VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(image.image, format, cubemap == Cubemap::Yes ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D_ARRAY, aspectFlags);
-    vkVerify(vkCreateImageView(allocatorInfo.device, &imageViewCreateInfo, nullptr, &image.imageView));
-
-    return image;
-}
-
-GpuImage createAndUploadGpuImage2DArray(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, Cubemap cubemap, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
-{
-    ASSERT(image.faceCount == 6);
-    GpuImage gpuImage = createGpuImage2DArray(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, cubemap, aspectFlags);
+    ASSERT(image.faceCount == 1 || image.faceCount == 6);
+    GpuImage gpuImage = createGpuImage(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, type, aspectFlags);
     copyImage(image, gpuImage, dstQueueFamily, dstLayout);
     return gpuImage;
 }
@@ -335,7 +317,7 @@ void pipelineBarrier(VkCommandBuffer cmd,
         bufferMemoryBarriers[i].dstAccessMask = getVkAccessFlags(bufferBarriers[i].dstAccessMask);
         bufferMemoryBarriers[i].srcQueueFamilyIndex = getFamilyIndex(bufferBarriers[i].srcQueueFamily);
         bufferMemoryBarriers[i].dstQueueFamilyIndex = getFamilyIndex(bufferBarriers[i].dstQueueFamily);
-        bufferMemoryBarriers[i].buffer = bufferBarriers[i].buffer;
+        bufferMemoryBarriers[i].buffer = bufferBarriers[i].buffer.buffer;
         bufferMemoryBarriers[i].offset = 0;
         bufferMemoryBarriers[i].size = VK_WHOLE_SIZE;
     }
@@ -356,7 +338,7 @@ void pipelineBarrier(VkCommandBuffer cmd,
         imageMemoryBarriers[i].newLayout = imageBarriers[i].newLayout;
         imageMemoryBarriers[i].srcQueueFamilyIndex = getFamilyIndex(imageBarriers[i].srcQueueFamily);
         imageMemoryBarriers[i].dstQueueFamilyIndex = getFamilyIndex(imageBarriers[i].dstQueueFamily);
-        imageMemoryBarriers[i].image = imageBarriers[i].image;
+        imageMemoryBarriers[i].image = imageBarriers[i].image.image;
         imageMemoryBarriers[i].subresourceRange = initImageSubresourceRange(aspectMask, imageBarriers[i].baseMipLevel, imageBarriers[i].levelCount, imageBarriers[i].baseArrayLayer, imageBarriers[i].layerCount);
     }
 
@@ -402,17 +384,21 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
     }
 }
 
-void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily)
+void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily)
 {
     ZoneScoped;
+
     Cmd transferCmd = allocateCmd(transferCommandPool);
 
     if (dstQueueFamily == QueueFamily::Transfer)
     {
         beginOneTimeCmd(transferCmd);
-        vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer, copyRegionCount, copyRegions);
+        beginCmdLabel(transferCmd, __FUNCTION__);
+        vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer.buffer, copyRegionCount, copyRegions);
+        endCmdLabel(transferCmd);
         endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
         freeCmd(transferCmd);
+
         return;
     }
 
@@ -441,31 +427,30 @@ void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint3
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
     VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    BufferBarrier bufferBarrier {};
 
     beginOneTimeCmd(transferCmd);
-    vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer, copyRegionCount, copyRegions);
-    BufferBarrier bufferBarriers[2] {};
-    bufferBarriers[0].buffer = buffer;
-    bufferBarriers[0].srcStageMask = StageFlags::Copy;
-    bufferBarriers[0].srcAccessMask = AccessFlags::Write;
-    bufferBarriers[0].srcQueueFamily = QueueFamily::Transfer;
-    bufferBarriers[0].dstQueueFamily = dstQueueFamily;
-    bufferBarriers[1].buffer = stagingBuffer.buffer;
-    bufferBarriers[1].srcStageMask = StageFlags::Copy;
-    bufferBarriers[1].srcAccessMask = AccessFlags::Read;
-    bufferBarriers[1].dstStageMask = StageFlags::Copy;
-    bufferBarriers[1].dstAccessMask = AccessFlags::Write;
-    pipelineBarrier(transferCmd.commandBuffer, bufferBarriers, 2, nullptr, 0);
+    beginCmdLabel(transferCmd, __FUNCTION__);
+    vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer.buffer, copyRegionCount, copyRegions);
+    bufferBarrier.buffer = buffer;
+    bufferBarrier.srcStageMask = StageFlags::Copy;
+    bufferBarrier.srcAccessMask = AccessFlags::Write;
+    bufferBarrier.srcQueueFamily = QueueFamily::Transfer;
+    bufferBarrier.dstQueueFamily = dstQueueFamily;
+    pipelineBarrier(transferCmd.commandBuffer, &bufferBarrier, 1, nullptr, 0);
+    endCmdLabel(transferCmd);
     endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
 
     beginOneTimeCmd(dstCmd);
-    bufferBarriers[0] = {};
-    bufferBarriers[0].buffer = buffer;
-    bufferBarriers[0].dstStageMask = dstStageMask;
-    bufferBarriers[0].dstAccessMask = AccessFlags::Read | AccessFlags::Write;
-    bufferBarriers[0].srcQueueFamily = QueueFamily::Transfer;
-    bufferBarriers[0].dstQueueFamily = dstQueueFamily;
-    pipelineBarrier(dstCmd, bufferBarriers, 1, nullptr, 0);
+    beginCmdLabel(dstCmd, "QFO Acquire");
+    bufferBarrier = {};
+    bufferBarrier.buffer = buffer;
+    bufferBarrier.dstStageMask = dstStageMask;
+    bufferBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+    bufferBarrier.srcQueueFamily = QueueFamily::Transfer;
+    bufferBarrier.dstQueueFamily = dstQueueFamily;
+    pipelineBarrier(dstCmd, &bufferBarrier, 1, nullptr, 0);
+    endCmdLabel(dstCmd);
     endAndSubmitOneTimeCmd(dstCmd, dstQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
 
     vkDestroySemaphore(device, semaphore, nullptr);
@@ -473,7 +458,7 @@ void copyStagingBufferToBuffer(VkBuffer buffer, VkBufferCopy *copyRegions, uint3
     freeCmd(dstCmd);
 }
 
-void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily, VkImageLayout dstLayout)
+static void copyStagingBufferToImage(GpuImage &image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily, VkImageLayout dstLayout)
 {
     ZoneScoped;
     Cmd transferCmd = allocateCmd(transferCommandPool);
@@ -481,6 +466,7 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
     if (dstQueueFamily == QueueFamily::Transfer)
     {
         beginOneTimeCmd(transferCmd);
+        beginCmdLabel(transferCmd, __FUNCTION__);
         ImageBarrier imageBarrier {};
         imageBarrier.image = image;
         imageBarrier.srcStageMask = StageFlags::None;
@@ -490,7 +476,7 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
         imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-        vkCmdCopyBufferToImage(transferCmd.commandBuffer, stagingBuffer.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegionCount, copyRegions);
+        vkCmdCopyBufferToImage(transferCmd.commandBuffer, stagingBuffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegionCount, copyRegions);
 
         if (dstLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         {
@@ -504,6 +490,8 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
             imageBarrier.newLayout = dstLayout;
             pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
         }
+
+        endCmdLabel(transferCmd);
         endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
         freeCmd(transferCmd);
         return;
@@ -534,9 +522,10 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
     VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    ImageBarrier imageBarrier {};
 
     beginOneTimeCmd(transferCmd);
-    ImageBarrier imageBarrier {};
+    beginCmdLabel(transferCmd, __FUNCTION__);
     imageBarrier.image = image;
     imageBarrier.srcStageMask = StageFlags::None;
     imageBarrier.dstStageMask = StageFlags::Copy;
@@ -545,28 +534,33 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdCopyBufferToImage(transferCmd.commandBuffer, stagingBuffer.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegionCount, copyRegions);
+    vkCmdCopyBufferToImage(transferCmd.commandBuffer, stagingBuffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegionCount, copyRegions);
     imageBarrier = {};
     imageBarrier.image = image;
     imageBarrier.srcStageMask = StageFlags::Copy;
+    imageBarrier.dstStageMask = StageFlags::None;
     imageBarrier.srcAccessMask = AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::None;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     imageBarrier.newLayout = dstLayout;
     imageBarrier.srcQueueFamily = QueueFamily::Transfer;
     imageBarrier.dstQueueFamily = dstQueueFamily;
     pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
+    endCmdLabel(transferCmd);
     endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
 
     beginOneTimeCmd(dstCmd);
+    beginCmdLabel(dstCmd, "QFO Acquire");
     imageBarrier = {};
     imageBarrier.image = image;
     imageBarrier.dstStageMask = dstStageMask;
-    imageBarrier.dstAccessMask = AccessFlags::Read;
+    imageBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     imageBarrier.newLayout = dstLayout;
     imageBarrier.srcQueueFamily = QueueFamily::Transfer;
     imageBarrier.dstQueueFamily = dstQueueFamily;
     pipelineBarrier(dstCmd, nullptr, 0, &imageBarrier, 1);
+    endCmdLabel(dstCmd);
     endAndSubmitOneTimeCmd(dstCmd, dstQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
 
     vkDestroySemaphore(device, semaphore, nullptr);
@@ -574,14 +568,20 @@ void copyStagingBufferToImage(VkImage image, VkBufferImageCopy *copyRegions, uin
     freeCmd(dstCmd);
 }
 
-void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily srcQueueFamily)
+static void copyImageToStagingBuffer(const GpuImage &image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily srcQueueFamily)
 {
     ZoneScoped;
     Cmd transferCmd = allocateCmd(transferCommandPool);
+    BufferBarrier bufferBarrier {};
+    bufferBarrier.buffer = stagingBuffer;
+    bufferBarrier.srcStageMask = StageFlags::Copy;
+    bufferBarrier.dstStageMask = StageFlags::Copy;
+    bufferBarrier.srcAccessMask = AccessFlags::Read;
+    bufferBarrier.dstAccessMask = AccessFlags::Write;
 
     if (srcQueueFamily == QueueFamily::Transfer)
     {
-        beginOneTimeCmd(transferCmd);
+        beginCmdLabel(transferCmd, __FUNCTION__);
         ImageBarrier imageBarrier {};
         imageBarrier.image = image;
         imageBarrier.srcStageMask = StageFlags::None;
@@ -590,8 +590,9 @@ void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uin
         imageBarrier.dstAccessMask = AccessFlags::Read;
         imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-        vkCmdCopyImageToBuffer(transferCmd.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer.buffer, copyRegionCount, copyRegions);
+        pipelineBarrier(transferCmd, &bufferBarrier, 1, &imageBarrier, 1);
+        vkCmdCopyImageToBuffer(transferCmd.commandBuffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer.buffer, copyRegionCount, copyRegions);
+        endCmdLabel(transferCmd);
         endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
         freeCmd(transferCmd);
         return;
@@ -622,20 +623,23 @@ void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uin
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
     vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
     VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    ImageBarrier imageBarrier {};
 
     beginOneTimeCmd(srcCmd);
-    ImageBarrier imageBarrier {};
+    beginCmdLabel(srcCmd, "QFO Release");
     imageBarrier.image = image;
     imageBarrier.srcStageMask = srcStageMask;
-    imageBarrier.srcAccessMask = AccessFlags::Write;
+    imageBarrier.srcAccessMask = AccessFlags::Read | AccessFlags::Write;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     imageBarrier.srcQueueFamily = srcQueueFamily;
     imageBarrier.dstQueueFamily = QueueFamily::Transfer;
     pipelineBarrier(srcCmd, nullptr, 0, &imageBarrier, 1);
+    endCmdLabel(srcCmd);
     endAndSubmitOneTimeCmd(srcCmd, srcQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
 
     beginOneTimeCmd(transferCmd);
+    beginCmdLabel(transferCmd, __FUNCTION__);
     imageBarrier = {};
     imageBarrier.image = image;
     imageBarrier.dstStageMask = StageFlags::Copy;
@@ -644,8 +648,9 @@ void copyImageToStagingBuffer(VkImage image, VkBufferImageCopy *copyRegions, uin
     imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     imageBarrier.srcQueueFamily = srcQueueFamily;
     imageBarrier.dstQueueFamily = QueueFamily::Transfer;
-    pipelineBarrier(transferCmd, nullptr, 0, &imageBarrier, 1);
-    vkCmdCopyImageToBuffer(transferCmd.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer.buffer, copyRegionCount, copyRegions);
+    pipelineBarrier(transferCmd, &bufferBarrier, 1, &imageBarrier, 1);
+    vkCmdCopyImageToBuffer(transferCmd.commandBuffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer.buffer, copyRegionCount, copyRegions);
+    endCmdLabel(transferCmd);
     endAndSubmitOneTimeCmd(transferCmd, transferQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
 
     vkDestroySemaphore(device, semaphore, nullptr);

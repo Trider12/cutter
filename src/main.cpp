@@ -79,8 +79,8 @@ const struct ShaderCompileInfo
     ShaderType shaderType;
 } shaderInfos[]
 {
-    {shadersPath"basic.vert",                 spvsPath"basic.vert.spv",                 ShaderType::Vertex},
-    {shadersPath"basic.frag",                 spvsPath"basic.frag.spv",                 ShaderType::Fragment},
+    {shadersPath"model.vert",                 spvsPath"model.vert.spv",                 ShaderType::Vertex},
+    {shadersPath"model.frag",                 spvsPath"model.frag.spv",                 ShaderType::Fragment},
     {shadersPath"drawSkybox.vert",            spvsPath"drawSkybox.vert.spv",            ShaderType::Vertex},
     {shadersPath"drawSkybox.frag",            spvsPath"drawSkybox.frag.spv",            ShaderType::Fragment},
     {shadersPath"computeSkybox.comp",         spvsPath"computeSkybox.comp.spv",         ShaderType::Compute},
@@ -223,7 +223,6 @@ VkPipeline computePipeline;
 VkPipelineLayout computePipelineLayout;
 
 GpuBuffer modelBuffer;
-GpuBuffer skyboxBuffer;
 GpuBuffer globalUniformBuffer;
 
 GpuImage modelTextures[MAX_MODEL_TEXTURES];
@@ -251,7 +250,6 @@ FrameData frames[maxFramesInFlight];
 
 FlyCamera camera;
 Scene model;
-Scene skybox;
 LightingData lightData;
 
 bool rotateScene = false;
@@ -396,9 +394,10 @@ void initRenderTargets()
 {
     ZoneScoped;
     createSwapchain(windowExtent.width, windowExtent.height);
-    depthImage = createGpuImage2D(VK_FORMAT_D32_SFLOAT,
+    depthImage = createGpuImage(VK_FORMAT_D32_SFLOAT,
         windowExtent, 1,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        GpuImageType::Image2D,
         VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
@@ -494,8 +493,9 @@ void initDescriptors()
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
     VkDescriptorSetLayoutBinding skyboxSetBindings[]
     {
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT},
-        {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT},
+        {1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler},
+        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}
     };
 
     VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(globalSetBindings, COUNTOF(globalSetBindings));
@@ -556,7 +556,7 @@ void initPipelines()
     VkPipelineDepthStencilStateCreateInfo depthStencilState = initPipelineDepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
     VkPipelineColorBlendStateCreateInfo colorBlendState = initPipelineColorBlendStateCreateInfo(&blendState, 1);
     VkPipelineDynamicStateCreateInfo dynamicState = initPipelineDynamicStateCreateInfo();
-    VkPipelineRenderingCreateInfoKHR renderingInfo = initPipelineRenderingCreateInfo(&swapchainImageFormat, 1, depthImage.imageFormat);
+    VkPipelineRenderingCreateInfoKHR renderingInfo = initPipelineRenderingCreateInfo(&swapchainImageFormat, 1, depthImage.format);
     VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo = initGraphicsPipelineCreateInfo(modelPipelineLayout,
         stages,
         COUNTOF(stages),
@@ -580,7 +580,7 @@ void initPipelines()
     fragmentShader = createShaderModuleFromSpv(device, shaderInfos[3].shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
+    rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_GREATER_OR_EQUAL);
     graphicsPipelineCreateInfo.layout = skyboxPipelineLayout;
     vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &skyboxPipeline));
@@ -644,7 +644,7 @@ void initImgui()
     imguiInitInfo.MinImageCount = maxFramesInFlight;
     imguiInitInfo.ImageCount = maxFramesInFlight;
     imguiInitInfo.UseDynamicRendering = true;
-    imguiInitInfo.PipelineRenderingCreateInfo = initPipelineRenderingCreateInfo(&swapchainImageFormat, 1, depthImage.imageFormat);
+    imguiInitInfo.PipelineRenderingCreateInfo = initPipelineRenderingCreateInfo(&swapchainImageFormat, 1, depthImage.format);
     ImGui_ImplVulkan_Init(&imguiInitInfo);
 
     ImGuiIO &io = ImGui::GetIO();
@@ -747,7 +747,7 @@ void loadModel(const char *sceneDirPath)
         {transformsOffset, maxTransformsOffset, transformsSize},
         {materialsOffset, maxMaterialsOffset, materialsSize}
     };
-    copyStagingBufferToBuffer(modelBuffer.buffer, copies, COUNTOF(copies), QueueFamily::Graphics);
+    copyStagingBufferToBuffer(modelBuffer, copies, COUNTOF(copies), QueueFamily::Graphics);
 
     VkDescriptorBufferInfo bufferInfos[]
     {
@@ -772,8 +772,8 @@ void loadModel(const char *sceneDirPath)
         ZoneScopedN("Load Texture");
         ZoneText(model.imagePaths[i].data(), model.imagePaths[i].length());
         Image image = loadImage(model.imagePaths[i].data());
-        modelTextures[i] = createAndUploadGpuImage2D(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
-        freeImage(image);
+        modelTextures[i] = createAndCopyGpuImage(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
+        destroyImage(image);
         imageInfos[i].imageView = modelTextures[i].imageView;
         imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
@@ -791,40 +791,9 @@ void loadModel(const char *sceneDirPath)
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 }
 
-void loadEnvMaps(const char *scenePath)
+void loadEnvMaps()
 {
     ZoneScoped;
-    skybox = loadSceneFromFile(scenePath);
-
-    uint32_t indexCount = (uint32_t)skybox.indices.size();
-    uint32_t indicesSize = indexCount * sizeof(decltype(skybox.indices)::value_type);
-    uint32_t positionsSize = (uint32_t)skybox.positions.size() * sizeof(decltype(skybox.positions)::value_type);
-    uint32_t bufferSize = indicesSize + positionsSize;
-    uint32_t indicesOffset = 0;
-    uint32_t positionsOffset = indicesOffset + indicesSize;
-
-    if (!skyboxBuffer.buffer)
-    {
-        skyboxBuffer = createGpuBuffer(bufferSize,
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            0);
-    }
-
-    memcpy((char *)stagingBuffer.mappedData + indicesOffset, skybox.indices.data(), indicesSize);
-    memcpy((char *)stagingBuffer.mappedData + positionsOffset, skybox.positions.data(), positionsSize);
-
-    VkBufferCopy copies[]
-    {
-        {indicesOffset, indicesOffset, indicesSize},
-        {positionsOffset, positionsOffset, positionsSize}
-    };
-    copyStagingBufferToBuffer(skyboxBuffer.buffer, copies, COUNTOF(copies), QueueFamily::Graphics);
-
-    VkDescriptorBufferInfo skyboxBufferInfos[]
-    {
-        {skyboxBuffer.buffer, positionsOffset, positionsSize},
-    };
 
 #if SKIP_ENV_MAP_REIMPORT
     if (!pathExists(brdfLutImagePath))
@@ -832,8 +801,8 @@ void loadEnvMaps(const char *scenePath)
         computeBrdfLut(brdfLutImagePath);
 
     Image image = loadImage(brdfLutImagePath);
-    brdfLut = createAndUploadGpuImage2D(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
-    freeImage(image);
+    brdfLut = createAndCopyGpuImage(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT);
+    destroyImage(image);
 
     VkDescriptorImageInfo brdfLutImageInfo { nullptr, brdfLut.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     VkDescriptorImageInfo skyboxImageInfos[COUNTOF(hdriImagePaths)];
@@ -856,14 +825,14 @@ void loadEnvMaps(const char *scenePath)
             computeEnvMaps(hdriImagePaths[i], skyboxImagePath, irradianceMapImagePath, prefilteredMapImagePath);
 
         image = loadImage(skyboxImagePath);
-        skyboxImages[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
-        freeImage(image);
+        skyboxImages[i] = createAndCopyGpuImage(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, GpuImageType::Image2DCubemap);
+        destroyImage(image);
         image = loadImage(irradianceMapImagePath);
-        irradianceMaps[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
-        freeImage(image);
+        irradianceMaps[i] = createAndCopyGpuImage(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, GpuImageType::Image2DCubemap);
+        destroyImage(image);
         image = loadImage(prefilteredMapImagePath);
-        prefilteredMaps[i] = createAndUploadGpuImage2DArray(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, Cubemap::Yes);
-        freeImage(image);
+        prefilteredMaps[i] = createAndCopyGpuImage(image, QueueFamily::Graphics, VK_IMAGE_USAGE_SAMPLED_BIT, GpuImageType::Image2DCubemap);
+        destroyImage(image);
 
         skyboxImageInfos[i] = { nullptr, skyboxImages[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         irradianceImageInfos[i] = { nullptr, irradianceMaps[i].imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -875,8 +844,7 @@ void loadEnvMaps(const char *scenePath)
         initWriteDescriptorSetImage(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
         initWriteDescriptorSetImage(globalDescriptorSet, 8, COUNTOF(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
         initWriteDescriptorSetImage(globalDescriptorSet, 9, COUNTOF(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
-        initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, skyboxBufferInfos),
-        initWriteDescriptorSetImage(skyboxDescriptorSet, 1, COUNTOF(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
+        initWriteDescriptorSetImage(skyboxDescriptorSet, 2, COUNTOF(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
     };
 
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
@@ -927,6 +895,7 @@ void loadLights()
     {
         initWriteDescriptorSetBuffer(globalDescriptorSet, 5, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bufferInfos + 0),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
+        initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
     };
     vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
 }
@@ -937,7 +906,7 @@ void initScene()
     prepareAssets();
 
     loadModel(sceneInfos[selectedScene].sceneDirPath);
-    loadEnvMaps(sceneInfos[0].sceneDirPath);
+    loadEnvMaps();
     loadLights();
 
     camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
@@ -947,7 +916,6 @@ void initScene()
 void terminateScene()
 {
     destroyGpuBuffer(modelBuffer);
-    destroyGpuBuffer(skyboxBuffer);
     destroyGpuBuffer(globalUniformBuffer);
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
@@ -1174,12 +1142,11 @@ void drawSkybox(Cmd cmd)
     uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
 
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
-    vkCmdBindIndexBuffer(cmd.commandBuffer, skyboxBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedSkybox);
-    VkDescriptorSet descriptorSets[] { globalDescriptorSet, skyboxDescriptorSet };
+    VkDescriptorSet descriptorSets[] { skyboxDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
-    vkCmdDrawIndexed(cmd.commandBuffer, (uint32_t)skybox.indices.size(), 1, 0, 0, 0);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 1, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
+    vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
 
 void drawUI(Cmd cmd)
@@ -1410,7 +1377,7 @@ void draw()
         VkRenderingInfoKHR renderingInfo = initRenderingInfo(swapchainImageExtent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
 
         ImageBarrier imageBarrier {};
-        imageBarrier.image = swapchainImages[swapchainImageIndex];
+        imageBarrier.image.image = swapchainImages[swapchainImageIndex];
         imageBarrier.srcStageMask = StageFlags::ColorAttachment; // wait for acquire semaphore
         imageBarrier.dstStageMask = StageFlags::ColorAttachment;
         imageBarrier.srcAccessMask = AccessFlags::None;

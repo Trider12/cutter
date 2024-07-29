@@ -1,7 +1,10 @@
+#ifdef DEBUG
 #include "DebugUtils.hpp"
 #include "Utils.hpp"
-#ifdef DEBUG
+
 #include <renderdoc_app.h>
+
+extern VkDevice device;
 
 static RENDERDOC_API_1_6_0 *renderdocApi = nullptr;
 #ifdef _WIN32
@@ -41,10 +44,11 @@ void endRenderdocCapture()
     if (renderdocApi)
         renderdocApi->EndFrameCapture(nullptr, nullptr);
 }
-#else
-void initRenderdoc() {}
 
-void startRenderdocCapture() {}
+void setGpuImageName(GpuImage &gpuImage, const char *name)
+{
+    VkDebugUtilsObjectNameInfoEXT objectNameInfo = initDebugUtilsObjectNameInfoEXT(VK_OBJECT_TYPE_IMAGE, gpuImage.image, name);
+    vkSetDebugUtilsObjectNameEXT(device, &objectNameInfo);
+}
 
-void endRenderdocCapture() {}
 #endif // DEBUG
