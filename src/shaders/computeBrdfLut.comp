@@ -49,6 +49,6 @@ void main()
     if(any(greaterThanEqual(imgCoords, imgSize)))
         return;
 
-    vec2 texCoords = vec2(imgCoords.x + 0.5f, imgSize.y - imgCoords.y - 0.5f) / imgSize;
+    vec2 texCoords = vec2(imgCoords.x + 0.5f, imgCoords.y + 0.5f) / imgSize;
     imageStore(brdfLutImage, imgCoords, computeBrdf(texCoords));
 }

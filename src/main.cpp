@@ -231,7 +231,7 @@ GpuImage skyboxImages[COUNTOF(hdriImagePaths)];
 GpuImage irradianceMaps[COUNTOF(hdriImagePaths)];
 GpuImage prefilteredMaps[COUNTOF(hdriImagePaths)];
 GpuImage brdfLut;
-uint32_t selectedSkybox = 0;
+uint32_t selectedSkybox = 1;
 
 VkSampler linearClampSampler;
 VkSampler linearRepeatSampler;
@@ -695,11 +695,13 @@ void loadModel(const char *sceneDirPath)
     static const uint32_t maxTransformsSize = maxTransformCount * sizeof(TransformData);
     static const uint32_t maxMaterialsSize = maxMaterialCount * sizeof(MaterialData);
     static const uint32_t maxBufferSize = maxIndicesSize + maxPositionsSize + maxNormalUvsSize + maxTransformsSize + maxMaterialsSize;
-    static const uint32_t maxIndicesOffset = 0;
-    static const uint32_t maxPositionsOffset = maxIndicesOffset + maxIndicesSize;
-    static const uint32_t maxNormalUvsOffset = maxPositionsOffset + maxPositionsSize;
-    static const uint32_t maxTransformsOffset = maxNormalUvsOffset + maxNormalUvsSize;
-    static const uint32_t maxMaterialsOffset = maxTransformsOffset + maxTransformsSize;
+
+    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
+    uint32_t maxIndicesOffset = 0;
+    uint32_t maxPositionsOffset = aligned(maxIndicesOffset + maxIndicesSize, sboAlignment);
+    uint32_t maxNormalUvsOffset = aligned(maxPositionsOffset + maxPositionsSize, sboAlignment);
+    uint32_t maxTransformsOffset = aligned(maxNormalUvsOffset + maxNormalUvsSize, sboAlignment);
+    uint32_t maxMaterialsOffset = aligned(maxTransformsOffset + maxTransformsSize, sboAlignment);
 
     model = loadSceneFromFile(sceneDirPath);
 
@@ -1344,8 +1346,7 @@ void draw()
     }
 
     FrameData &frame = frames[frameIndex];
-    auto val = vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX);
-    vkVerify(val);
+    vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
     uint32_t swapchainImageIndex;
     VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
 

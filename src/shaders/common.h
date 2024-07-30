@@ -84,6 +84,7 @@ struct CameraData
     mat4 invViewMat;
     mat4 projMat;
     uint sceneConfig;
+    uint pad[3];
 };
 
 #ifdef __cplusplus
@@ -96,6 +97,8 @@ static_assert(sizeof(NormalUv) == 8, "");
 static_assert(sizeof(MaterialData) == 16, "");
 static_assert(sizeof(TransformData) == 128, "");
 static_assert(sizeof(LightData) == 24, "");
+static_assert(sizeof(LightingData) == sizeof(LightData) * MAX_LIGHTS + 4, "");
+static_assert(sizeof(CameraData) == sizeof(float[4]) * 17, "");
 #endif // __cplusplus
 
 #endif // !COMMON_H
