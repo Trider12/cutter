@@ -20,10 +20,6 @@
 
 #define NAMEOF(var) #var
 
-template <typename T, uint32_t N>
-inline constexpr uint32_t countof(T(&)[N]) { return N; }
-#define COUNTOF countof
-
 #define defineEnumOperators(enumType, intType) \
 inline intType  operator+(enumType a) { return (intType)a; } \
 inline enumType operator~(enumType a) { return (enumType)(~(intType)a); } \
@@ -35,6 +31,9 @@ inline intType  operator&(intType a, enumType b) { return a & (intType)b; } \
 inline intType  operator|(intType a, enumType b) { return a | (intType)b; }
 
 #define EnumBool(enumType) enum class enumType : uint8_t { No = 0, Yes = 1 }
+
+template <typename T, uint32_t N>
+inline constexpr uint32_t countOf(T(&)[N]) { return N; }
 
 inline constexpr uint32_t max(uint32_t a, uint32_t b)
 {

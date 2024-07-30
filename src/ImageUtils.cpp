@@ -106,10 +106,10 @@ void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdf
         {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, prefilteredMapLevelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // prefiltered normalMapImage array
         {5, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler}
     };
-    VkDescriptorBindingFlags bindingFlags[COUNTOF(setBindings)] {};
+    VkDescriptorBindingFlags bindingFlags[countOf(setBindings)] {};
     bindingFlags[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo = initDescriptorSetLayoutBindingFlagsCreateInfo(bindingFlags, COUNTOF(bindingFlags));
-    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, COUNTOF(setBindings), &flagsInfo);
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo = initDescriptorSetLayoutBindingFlagsCreateInfo(bindingFlags, countOf(bindingFlags));
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(setBindings, countOf(setBindings), &flagsInfo);
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &commonDescriptorSetLayout));
     VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &commonDescriptorSetLayout, 1);
     vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &commonDescriptorSet));
@@ -158,15 +158,15 @@ void initImageUtils(const char *computeSkyboxShaderPath, const char *computeBrdf
         initComputePipelineCreateInfo(shaderStageCreateInfos[3], commonPipelineLayout),
         initComputePipelineCreateInfo(shaderStageCreateInfos[4], commonPipelineLayout)
     };
-    VkPipeline pipelines[COUNTOF(computePipelineCreateInfos)];
-    vkVerify(vkCreateComputePipelines(device, nullptr, COUNTOF(computePipelineCreateInfos), computePipelineCreateInfos, nullptr, pipelines));
+    VkPipeline pipelines[countOf(computePipelineCreateInfos)];
+    vkVerify(vkCreateComputePipelines(device, nullptr, countOf(computePipelineCreateInfos), computePipelineCreateInfos, nullptr, pipelines));
     computeSkyboxPipeline = pipelines[0];
     computeBrdfLutPipeline = pipelines[1];
     computeIrradianceMapPipeline = pipelines[2];
     computePrefilteredMapPipeline = pipelines[3];
     normalizeNormalMapPipeline = pipelines[4];
 
-    for (uint8_t i = 0; i < COUNTOF(shaderModules); i++)
+    for (uint8_t i = 0; i < countOf(shaderModules); i++)
     {
         vkDestroyShaderModule(device, shaderModules[i], nullptr);
     }
@@ -1016,7 +1016,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         initWriteDescriptorSetImage(commonDescriptorSet, 3, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 3),
         initWriteDescriptorSetImage(commonDescriptorSet, 4, prefilteredMapLevelCount, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + 4)
     };
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 
     VkSemaphore semaphore;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();

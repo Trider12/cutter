@@ -164,7 +164,7 @@ const char *const materialNames[]
     "Rusted Iron",
     "Copper Rock"
 };
-static_assert(COUNTOF(materialInfos) + 1 == COUNTOF(materialNames), "");
+static_assert(countOf(materialInfos) + 1 == countOf(materialNames), "");
 uint32_t selectedMaterial = 0;
 
 const char *const hdriImagePaths[]
@@ -227,9 +227,9 @@ GpuBuffer globalUniformBuffer;
 
 GpuImage modelTextures[MAX_MODEL_TEXTURES];
 uint8_t modelTextureCount;
-GpuImage skyboxImages[COUNTOF(hdriImagePaths)];
-GpuImage irradianceMaps[COUNTOF(hdriImagePaths)];
-GpuImage prefilteredMaps[COUNTOF(hdriImagePaths)];
+GpuImage skyboxImages[countOf(hdriImagePaths)];
+GpuImage irradianceMaps[countOf(hdriImagePaths)];
+GpuImage prefilteredMaps[countOf(hdriImagePaths)];
 GpuImage brdfLut;
 uint32_t selectedSkybox = 1;
 
@@ -471,7 +471,7 @@ void initDescriptors()
         {VK_DESCRIPTOR_TYPE_SAMPLER, 16},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1} // for imgui
     };
-    VkDescriptorPoolCreateInfo poolCreateInfo = initDescriptorPoolCreateInfo(10, poolSizes, COUNTOF(poolSizes), VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT /* for imgui */);
+    VkDescriptorPoolCreateInfo poolCreateInfo = initDescriptorPoolCreateInfo(10, poolSizes, countOf(poolSizes), VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT /* for imgui */);
     vkVerify(vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, &descriptorPool));
 
     VkDescriptorSetLayoutBinding globalSetBindings[]
@@ -484,8 +484,8 @@ void initDescriptors()
         {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT},
         {7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
-        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
+        {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
+        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
         {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
         {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
@@ -495,21 +495,21 @@ void initDescriptors()
     {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT},
         {1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, COUNTOF(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}
+        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}
     };
 
-    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(globalSetBindings, COUNTOF(globalSetBindings));
+    VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(globalSetBindings, countOf(globalSetBindings));
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &globalDescriptorSetLayout));
     setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(&texturesSetBinding, 1);
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &texturesDescriptorSetLayout));
-    setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(skyboxSetBindings, COUNTOF(skyboxSetBindings));
+    setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(skyboxSetBindings, countOf(skyboxSetBindings));
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &skyboxDescriptorSetLayout));
     setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(nullptr, 0);
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &computeDescriptorSetLayout));
 
     VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout, skyboxDescriptorSetLayout, computeDescriptorSetLayout };
-    VkDescriptorSet sets[COUNTOF(layouts)];
-    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, layouts, COUNTOF(layouts));
+    VkDescriptorSet sets[countOf(layouts)];
+    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, layouts, countOf(layouts));
     vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, sets));
     globalDescriptorSet = sets[0];
     texturesDescriptorSet = sets[1];
@@ -536,7 +536,7 @@ void initPipelines()
     range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     range.size = 3 * sizeof(uint32_t);
     VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(layouts, COUNTOF(layouts), &range, 1);
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(layouts, countOf(layouts), &range, 1);
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &modelPipelineLayout));
 
     VkPipelineColorBlendAttachmentState blendState {};
@@ -559,7 +559,7 @@ void initPipelines()
     VkPipelineRenderingCreateInfoKHR renderingInfo = initPipelineRenderingCreateInfo(&swapchainImageFormat, 1, depthImage.format);
     VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo = initGraphicsPipelineCreateInfo(modelPipelineLayout,
         stages,
-        COUNTOF(stages),
+        countOf(stages),
         &vertexInputState,
         &inputAssemblyState,
         &viewportState,
@@ -665,7 +665,7 @@ void prepareAssets()
     ZoneScoped;
     ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
-    for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
+    for (uint8_t i = 0; i < countOf(sceneInfos); i++)
     {
 #if SKIP_SCENE_REIMPORT
         if (!pathExists(sceneInfos[i].sceneDirPath))
@@ -673,7 +673,7 @@ void prepareAssets()
             importSceneFromGlb(sceneInfos[i].glbAssetPath, sceneInfos[i].sceneDirPath, sceneInfos[i].scalingFactor);
     }
 
-    for (uint8_t i = 0; i < COUNTOF(materialInfos); i++)
+    for (uint8_t i = 0; i < countOf(materialInfos); i++)
     {
 #if SKIP_MATERIAL_REIMPORT
         if (!pathExists(materialInfos[i].dstSet.baseColorTexPath))
@@ -705,7 +705,7 @@ void loadModel(const char *sceneDirPath)
 
     model = loadSceneFromFile(sceneDirPath);
 
-    for (uint8_t j = 0; j < COUNTOF(materialInfos); j++)
+    for (uint8_t j = 0; j < countOf(materialInfos); j++)
     {
         addMaterialToScene(model, materialInfos[j].dstSet);
     }
@@ -749,7 +749,7 @@ void loadModel(const char *sceneDirPath)
         {transformsOffset, maxTransformsOffset, transformsSize},
         {materialsOffset, maxMaterialsOffset, materialsSize}
     };
-    copyStagingBufferToBuffer(modelBuffer, copies, COUNTOF(copies), QueueFamily::Graphics);
+    copyStagingBufferToBuffer(modelBuffer, copies, countOf(copies), QueueFamily::Graphics);
 
     VkDescriptorBufferInfo bufferInfos[]
     {
@@ -790,7 +790,7 @@ void loadModel(const char *sceneDirPath)
         initWriteDescriptorSetImage(texturesDescriptorSet, 0, modelTextureCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos)
     };
 
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
 
 void loadEnvMaps()
@@ -807,12 +807,12 @@ void loadEnvMaps()
     destroyImage(image);
 
     VkDescriptorImageInfo brdfLutImageInfo { nullptr, brdfLut.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-    VkDescriptorImageInfo skyboxImageInfos[COUNTOF(hdriImagePaths)];
-    VkDescriptorImageInfo irradianceImageInfos[COUNTOF(hdriImagePaths)];
-    VkDescriptorImageInfo prefilteredImageInfos[COUNTOF(hdriImagePaths)];
+    VkDescriptorImageInfo skyboxImageInfos[countOf(hdriImagePaths)];
+    VkDescriptorImageInfo irradianceImageInfos[countOf(hdriImagePaths)];
+    VkDescriptorImageInfo prefilteredImageInfos[countOf(hdriImagePaths)];
     char skyboxImagePath[256], irradianceMapImagePath[256], prefilteredMapImagePath[256];
 
-    for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
+    for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
     {
         const char *hdriFilename;
         size_t hdriFilenameLength;
@@ -844,12 +844,12 @@ void loadEnvMaps()
     VkWriteDescriptorSet writes[]
     {
         initWriteDescriptorSetImage(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
-        initWriteDescriptorSetImage(globalDescriptorSet, 8, COUNTOF(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
-        initWriteDescriptorSetImage(globalDescriptorSet, 9, COUNTOF(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
-        initWriteDescriptorSetImage(skyboxDescriptorSet, 2, COUNTOF(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 8, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 9, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
+        initWriteDescriptorSetImage(skyboxDescriptorSet, 2, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
     };
 
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
 
 void loadLights()
@@ -899,7 +899,7 @@ void loadLights()
         initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
         initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
     };
-    vkUpdateDescriptorSets(device, COUNTOF(writes), writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
 
 void initScene()
@@ -925,7 +925,7 @@ void terminateScene()
         destroyGpuImage(modelTextures[i]);
     }
 
-    for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
+    for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
     {
         destroyGpuImage(skyboxImages[i]);
         destroyGpuImage(irradianceMaps[i]);
@@ -986,7 +986,7 @@ void compileShaders()
     ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
     initShaderCompiler();
-    for (uint8_t i = 0; i < COUNTOF(shaderInfos); i++)
+    for (uint8_t i = 0; i < countOf(shaderInfos); i++)
     {
         compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
     }
@@ -1132,7 +1132,7 @@ void drawModel(Cmd cmd)
 
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
     vkCmdDraw(cmd.commandBuffer, (uint32_t)model.indices.size(), 1, 0, 0);
 }
 
@@ -1147,7 +1147,7 @@ void drawSkybox(Cmd cmd)
     vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedSkybox);
     VkDescriptorSet descriptorSets[] { skyboxDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 1, COUNTOF(descriptorSets), descriptorSets, COUNTOF(dynamicOffsets), dynamicOffsets);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 1, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
     vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
 
@@ -1172,7 +1172,7 @@ void drawUI(Cmd cmd)
         cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
         if (ImGui::BeginCombo("##Model", basename, ImGuiComboFlags_WidthFitPreview))
         {
-            for (uint8_t i = 0; i < COUNTOF(sceneInfos); i++)
+            for (uint8_t i = 0; i < countOf(sceneInfos); i++)
             {
                 bool selected = i == selectedScene;
                 cwk_path_get_basename(sceneInfos[i].sceneDirPath, &basename, nullptr);
@@ -1191,7 +1191,7 @@ void drawUI(Cmd cmd)
         ImGui::TableNextColumn();
         if (ImGui::BeginCombo("##Material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
         {
-            for (uint8_t i = 0; i < COUNTOF(materialNames); i++)
+            for (uint8_t i = 0; i < countOf(materialNames); i++)
             {
                 bool selected = i == selectedMaterial;
                 if (ImGui::Selectable(materialNames[i], selected) && !selected)
@@ -1209,7 +1209,7 @@ void drawUI(Cmd cmd)
         cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
         if (ImGui::BeginCombo("##Skybox", basename, ImGuiComboFlags_WidthFitPreview))
         {
-            for (uint8_t i = 0; i < COUNTOF(hdriImagePaths); i++)
+            for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
             {
                 bool selected = i == selectedSkybox;
                 cwk_path_get_basename(hdriImagePaths[i], &basename, nullptr);
@@ -1267,7 +1267,7 @@ void drawUI(Cmd cmd)
         };
         static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular" };
         static uint8_t selectedChannel = 0;
-        static_assert(COUNTOF(debugChannels) == COUNTOF(debugChannelNames), "");
+        static_assert(countOf(debugChannels) == countOf(debugChannelNames), "");
 
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
@@ -1275,7 +1275,7 @@ void drawUI(Cmd cmd)
         ImGui::TableNextColumn();
         if (ImGui::BeginCombo("##Debug Channel", debugChannelNames[selectedChannel], ImGuiComboFlags_WidthFitPreview))
         {
-            for (uint8_t i = 0; i < COUNTOF(debugChannelNames); i++)
+            for (uint8_t i = 0; i < countOf(debugChannelNames); i++)
             {
                 bool selected = i == selectedChannel;
                 if (ImGui::Selectable(debugChannelNames[i], selected) && !selected)

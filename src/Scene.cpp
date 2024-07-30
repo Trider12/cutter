@@ -73,7 +73,7 @@ static void optimizeScene(Scene &scene)
         {scene.normalUvs.data(), sizeof(NormalUv), sizeof(NormalUv)}
     };
     std::vector<unsigned int> remap(scene.indices.size());
-    size_t newVertexCount = meshopt_generateVertexRemapMulti(remap.data(), scene.indices.data(), scene.indices.size(), scene.positions.size(), streams, COUNTOF(streams));
+    size_t newVertexCount = meshopt_generateVertexRemapMulti(remap.data(), scene.indices.data(), scene.indices.size(), scene.positions.size(), streams, countOf(streams));
 
     std::vector<uint32_t> newIndexBuffer(scene.indices.size());
     std::vector<Position> newPositionBuffer(newVertexCount);
@@ -189,7 +189,7 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                 case cgltf_attribute_type_position:
                     for (cgltf_size k = 0; k < vertexCount; k++)
                     {
-                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, COUNTOF(values)));
+                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, countOf(values)));
                         Position &position = scene.positions[oldVertexCount + k];
                         position.x = meshopt_quantizeHalf(values[0]);
                         position.y = meshopt_quantizeHalf(values[1]);
@@ -200,7 +200,7 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                 case cgltf_attribute_type_normal:
                     for (cgltf_size k = 0; k < vertexCount; k++)
                     {
-                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, COUNTOF(values)));
+                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, countOf(values)));
                         NormalUv &normal = scene.normalUvs[oldVertexCount + k];
                         normal.x = (int8_t)meshopt_quantizeSnorm(values[0], 8);
                         normal.y = (int8_t)meshopt_quantizeSnorm(values[1], 8);
@@ -210,7 +210,7 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                 case cgltf_attribute_type_texcoord:
                     for (cgltf_size k = 0; k < vertexCount; k++)
                     {
-                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, COUNTOF(values)));
+                        VERIFY(cgltf_accessor_read_float(attribute.data, k, values, countOf(values)));
                         NormalUv &uv = scene.normalUvs[oldVertexCount + k];
                         uv.u = (uint16_t)meshopt_quantizeHalf(values[0]);
                         uv.v = (uint16_t)meshopt_quantizeHalf(values[1]);

@@ -366,7 +366,7 @@ VkPipelineDynamicStateCreateInfo initPipelineDynamicStateCreateInfo()
     static const VkDynamicState states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo pipelineDynamicStateCreateInfo {};
     pipelineDynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    pipelineDynamicStateCreateInfo.dynamicStateCount = COUNTOF(states);
+    pipelineDynamicStateCreateInfo.dynamicStateCount = countOf(states);
     pipelineDynamicStateCreateInfo.pDynamicStates = states;
 
     return pipelineDynamicStateCreateInfo;
