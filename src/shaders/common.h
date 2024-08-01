@@ -5,6 +5,7 @@
 #include "Glm.hpp"
 #define float16_t uint16_t
 #define uint uint32_t
+#define vec2 glm::vec2
 #define vec3 glm::vec3
 #define mat4 glm::mat4
 #else
@@ -87,9 +88,19 @@ struct CameraData
     uint pad[3];
 };
 
+struct LineData
+{
+    vec2 p1;
+    vec2 p2;
+    vec2 windowRes;
+    float width;
+    float pad;
+};
+
 #ifdef __cplusplus
 #undef float16_t
 #undef uint
+#undef vec2
 #undef vec3
 #undef mat4
 static_assert(sizeof(Position) == 8, "");
@@ -99,6 +110,7 @@ static_assert(sizeof(TransformData) == 128, "");
 static_assert(sizeof(LightData) == 24, "");
 static_assert(sizeof(LightingData) == sizeof(LightData) * MAX_LIGHTS + 4, "");
 static_assert(sizeof(CameraData) == sizeof(float[4]) * 17, "");
+static_assert(sizeof(LineData) == sizeof(float[2]) * 4, "");
 #endif // __cplusplus
 
 #endif // !COMMON_H

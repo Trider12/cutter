@@ -2,7 +2,7 @@
 
 #include <volk/volk.h>
 
-enum ShaderType
+enum ShaderType : uint8_t
 {
     Vertex,
     Fragment,

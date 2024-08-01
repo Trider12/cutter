@@ -72,24 +72,31 @@ const char *const appName = "Cutter";
 #define imagesPath     contentPath "images/"
 #define hdriImagesPath contentPath "hdri/"
 
-const struct ShaderCompileInfo
+struct ShaderCompileInfo
 {
     const char *shaderSourcePath;
     const char *shaderSpvPath;
     ShaderType shaderType;
-} shaderInfos[]
-{
-    {shadersPath"model.vert",                 spvsPath"model.vert.spv",                 ShaderType::Vertex},
-    {shadersPath"model.frag",                 spvsPath"model.frag.spv",                 ShaderType::Fragment},
-    {shadersPath"drawSkybox.vert",            spvsPath"drawSkybox.vert.spv",            ShaderType::Vertex},
-    {shadersPath"drawSkybox.frag",            spvsPath"drawSkybox.frag.spv",            ShaderType::Fragment},
-    {shadersPath"computeSkybox.comp",         spvsPath"computeSkybox.comp.spv",         ShaderType::Compute},
-    {shadersPath"computeBrdfLut.comp",        spvsPath"computeBrdfLut.comp.spv",        ShaderType::Compute},
-    {shadersPath"computeIrradianceMap.comp",  spvsPath"computeIrradianceMap.comp.spv",  ShaderType::Compute},
-    {shadersPath"computePrefilteredMap.comp", spvsPath"computePrefilteredMap.comp.spv", ShaderType::Compute},
-    {shadersPath"normalizeNormalMap.comp",    spvsPath"normalizeNormalMap.comp.spv",    ShaderType::Compute},
-    {shadersPath"compute.comp",               spvsPath"compute.comp.spv",               ShaderType::Compute}
+    uint8_t pad[3];
 };
+
+#define defineShader(name, ext, type) ShaderCompileInfo name##type##Shader{shadersPath #name ext, spvsPath #name ext ".spv", ShaderType::type}
+
+struct ShaderTable
+{
+    defineShader(model, ".vert", Vertex);
+    defineShader(model, ".frag", Fragment);
+    defineShader(drawSkybox, ".vert", Vertex);
+    defineShader(drawSkybox, ".frag", Fragment);
+    defineShader(line, ".vert", Vertex);
+    defineShader(line, ".frag", Fragment);
+    defineShader(computeSkybox, ".comp", Compute);
+    defineShader(computeBrdfLut, ".comp", Compute);
+    defineShader(computeIrradianceMap, ".comp", Compute);
+    defineShader(computePrefilteredMap, ".comp", Compute);
+    defineShader(normalizeNormalMap, ".comp", Compute);
+    defineShader(compute, ".comp", Compute);
+} shaderTable;
 
 const struct SceneImportInfo
 {
@@ -219,6 +226,8 @@ VkPipeline modelPipeline;
 VkPipelineLayout modelPipelineLayout;
 VkPipeline skyboxPipeline;
 VkPipelineLayout skyboxPipelineLayout;
+VkPipeline linePipeline;
+VkPipelineLayout linePipelineLayout;
 VkPipeline computePipeline;
 VkPipelineLayout computePipelineLayout;
 
@@ -260,6 +269,16 @@ glm::vec4 lightDirsAndIntensitiesUI[MAX_LIGHTS];
 glm::vec2 prevCursorPos;
 bool firstCursorUpdate = true;
 bool cursorCaptured = false;
+
+enum class CutState : uint8_t
+{
+    None = 0,
+    CutStarted,
+    CutFinished
+} cutState;
+
+const float defaultLineWidth = 30.f;
+LineData lineData;
 
 uint32_t debugFlags;
 
@@ -532,18 +551,18 @@ void initPipelines()
 {
     ZoneScoped;
     // Model
-    VkPushConstantRange range {};
-    range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    range.size = 3 * sizeof(uint32_t);
-    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(layouts, countOf(layouts), &range, 1);
+    VkPushConstantRange pushRange {};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = 3 * sizeof(uint32_t);
+    VkDescriptorSetLayout setLayouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(setLayouts, countOf(setLayouts), &pushRange, 1);
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &modelPipelineLayout));
 
     VkPipelineColorBlendAttachmentState blendState {};
     blendState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
-    VkShaderModule vertexShader = createShaderModuleFromSpv(device, shaderInfos[0].shaderSpvPath);
-    VkShaderModule fragmentShader = createShaderModuleFromSpv(device, shaderInfos[1].shaderSpvPath);
+    VkShaderModule vertexShader = createShaderModuleFromSpv(device, shaderTable.modelVertexShader.shaderSpvPath);
+    VkShaderModule fragmentShader = createShaderModuleFromSpv(device, shaderTable.modelFragmentShader.shaderSpvPath);
     VkPipelineShaderStageCreateInfo stages[2];
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
@@ -574,23 +593,46 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Skybox
-    layouts[1] = skyboxDescriptorSetLayout;
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(uint32_t);
+    setLayouts[1] = skyboxDescriptorSetLayout;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &skyboxPipelineLayout));
-    vertexShader = createShaderModuleFromSpv(device, shaderInfos[2].shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderInfos[3].shaderSpvPath);
+    vertexShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxVertexShader.shaderSpvPath);
+    fragmentShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxFragmentShader.shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_GREATER_OR_EQUAL);
     graphicsPipelineCreateInfo.layout = skyboxPipelineLayout;
     vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &skyboxPipeline));
     vkDestroyShaderModule(device, vertexShader, nullptr);
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
+    // Line
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(LineData);
+    pipelineLayoutCreateInfo.setLayoutCount = 0;
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &linePipelineLayout));
+    vertexShader = createShaderModuleFromSpv(device, shaderTable.lineVertexShader.shaderSpvPath);
+    fragmentShader = createShaderModuleFromSpv(device, shaderTable.lineFragmentShader.shaderSpvPath);
+    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
+    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
+    depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
+    blendState.blendEnable = true;
+    blendState.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendState.colorBlendOp = VK_BLEND_OP_ADD;
+    blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.alphaBlendOp = VK_BLEND_OP_ADD;
+    graphicsPipelineCreateInfo.layout = linePipelineLayout;
+    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &linePipeline));
+    vkDestroyShaderModule(device, vertexShader, nullptr);
+    vkDestroyShaderModule(device, fragmentShader, nullptr);
+
     // Compute
-    layouts[1] = computeDescriptorSetLayout;
+    setLayouts[1] = computeDescriptorSetLayout;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
-    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderInfos[9].shaderSpvPath);
+    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.computeComputeShader.shaderSpvPath);
     VkPipelineShaderStageCreateInfo computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &computePipeline));
@@ -605,6 +647,8 @@ void terminatePipelines()
     vkDestroyPipeline(device, skyboxPipeline, nullptr);
     vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
     vkDestroyPipeline(device, computePipeline, nullptr);
+    vkDestroyPipelineLayout(device, linePipelineLayout, nullptr);
+    vkDestroyPipeline(device, linePipeline, nullptr);
 }
 
 struct ImguiVulkanContext
@@ -911,6 +955,8 @@ void initScene()
     loadEnvMaps();
     loadLights();
 
+    lineData.width = defaultLineWidth * uiScale;
+
     camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
     //camera.lookAt(glm::vec3(scene.meshMatrices[0][3]));
 }
@@ -960,22 +1006,35 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
     UNUSED(wnd);
     UNUSED(mods);
 
-    if (ImGui::GetIO().WantCaptureMouse)
+    if (ImGui::GetIO().WantCaptureMouse || cursorCaptured)
         return;
 
     if (action == GLFW_PRESS)
     {
         if (button == GLFW_MOUSE_BUTTON_1)
         {
-            if (!cursorCaptured)
-            {
-                cursorCaptured = true;
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            }
+            cursorCaptured = true;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
 
         if (button == GLFW_MOUSE_BUTTON_2)
         {
+            switch (cutState)
+            {
+            case CutState::None:
+                double x, y;
+                glfwGetCursorPos(window, &x, &y);
+                lineData.p1 = glm::vec2(x, y);
+                cutState = CutState::CutStarted;
+                break;
+            case CutState::CutStarted:
+                cutState = CutState::CutFinished;
+                break;
+            case CutState::CutFinished:
+                break;
+            default:
+                break;
+            }
         }
     }
 }
@@ -986,9 +1045,10 @@ void compileShaders()
     ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
     initShaderCompiler();
-    for (uint8_t i = 0; i < countOf(shaderInfos); i++)
+    for (uint8_t i = 0; i < sizeof(shaderTable) / sizeof(ShaderCompileInfo); i++)
     {
-        compileShaderIntoSpv(shaderInfos[i].shaderSourcePath, shaderInfos[i].shaderSpvPath, shaderInfos[i].shaderType);
+        const ShaderCompileInfo &info = ((ShaderCompileInfo *)&shaderTable)[i];
+        compileShaderIntoSpv(info.shaderSourcePath, info.shaderSpvPath, info.shaderType);
     }
     terminateShaderCompiler();
 }
@@ -1016,7 +1076,11 @@ void init()
     initImgui();
     initRenderdoc();
     initJobSystem();
-    initImageUtils(shaderInfos[4].shaderSpvPath, shaderInfos[5].shaderSpvPath, shaderInfos[6].shaderSpvPath, shaderInfos[7].shaderSpvPath, shaderInfos[8].shaderSpvPath);
+    initImageUtils(shaderTable.computeSkyboxComputeShader.shaderSpvPath,
+        shaderTable.computeBrdfLutComputeShader.shaderSpvPath,
+        shaderTable.computeIrradianceMapComputeShader.shaderSpvPath,
+        shaderTable.computePrefilteredMapComputeShader.shaderSpvPath,
+        shaderTable.normalizeNormalMapComputeShader.shaderSpvPath);
 
     initScene();
 }
@@ -1083,6 +1147,21 @@ void updateLogic(float delta)
     frame.cameraData.invViewMat = camera.getWorldMatrix();
     frame.cameraData.projMat = projMat;
     frame.cameraData.sceneConfig = sceneConfig;
+
+    switch (cutState)
+    {
+    case CutState::CutStarted:
+        double x, y;
+        glfwGetCursorPos(window, &x, &y);
+        lineData.p2 = glm::vec2(x, y);
+        lineData.windowRes = glm::vec2(windowExtent.width, windowExtent.height);
+        break;
+    case CutState::CutFinished:
+        cutState = CutState::None;
+        break;
+    default:
+        break;
+    }
 }
 
 void update(float delta)
@@ -1336,6 +1415,18 @@ void drawUI(Cmd cmd)
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd.commandBuffer);
 }
 
+void drawLine(Cmd cmd)
+{
+    if (cutState == CutState::None)
+        return;
+
+    ZoneScoped;
+    ScopedGpuZone(cmd, "Line");
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
+    vkCmdPushConstants(cmd.commandBuffer, linePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LineData), &lineData);
+    vkCmdDraw(cmd.commandBuffer, 6, 1, 0, 0);
+}
+
 void draw()
 {
     ZoneScoped;
@@ -1391,6 +1482,8 @@ void draw()
         drawModel(cmd);
         drawSkybox(cmd);
         drawUI(cmd);
+        if (cutState != CutState::None)
+            drawLine(cmd);
         vkCmdEndRenderingKHR(cmd.commandBuffer);
 
         imageBarrier.srcStageMask = StageFlags::ColorAttachment;
