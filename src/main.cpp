@@ -1461,7 +1461,7 @@ void draw()
     Cmd cmd = frame.cmd;
     beginOneTimeCmd(cmd);
     {
-        ScopedGpuZone(cmd, "Draw");
+        ScopedGpuZoneAutoCollect(cmd, "Draw");
 
         VkClearValue colorClearValue {}, depthClearValue {};
         VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);

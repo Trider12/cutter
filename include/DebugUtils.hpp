@@ -34,19 +34,21 @@ inline void endCmdLabel(Cmd) {}
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyVulkan.hpp>
 
+#define GpuZoneCollect(cmd) TracyVkCollect(tracyContext, cmd.commandBuffer)
+
 extern TracyVkCtx tracyContext;
 
 class TracyCollectHelper
 {
 public:
     TracyCollectHelper(Cmd cmd) : cmd { cmd } {}
-    ~TracyCollectHelper() { TracyVkCollect(tracyContext, cmd.commandBuffer); }
+    ~TracyCollectHelper() { GpuZoneCollect(cmd); }
 private:
     Cmd cmd;
 };
 
 #ifdef DEBUG
-#define ScopedGpuZone(cmd, name) TracyCollectHelper TracyConcat(__TracyCollectHelper, TracyLine)(cmd); TracyVkZone(tracyContext, cmd.commandBuffer, name); ScopedGpuZoneImpl TracyConcat(__ScopedGpuZone, TracyLine)(cmd, name)
+#define ScopedGpuZone(cmd, name) TracyVkZone(tracyContext, cmd.commandBuffer, name); ScopedGpuZoneImpl TracyConcat(__ScopedGpuZone, TracyLine)(cmd, name)
 
 class ScopedGpuZoneImpl
 {
@@ -57,10 +59,13 @@ private:
     Cmd cmd;
 };
 #else
-#define ScopedGpuZone(cmd, name) TracyCollectHelper TracyConcat(__TracyCollectHelper, TracyLine)(cmd); TracyVkZone(tracyContext, cmd.commandBuffer, name)
+#define ScopedGpuZone(cmd, name) TracyVkZone(tracyContext, cmd.commandBuffer, name)
 #endif // DEBUG
 
+#define ScopedGpuZoneAutoCollect(cmd, name) TracyCollectHelper TracyConcat(__TracyCollectHelper, TracyLine)(cmd); ScopedGpuZone(cmd, name)
+
 #else
+#define GpuZoneCollect(cmd)
 #define ScopedGpuZone(cmd, name)
-#define ScopedGpuZoneColored(cmd, name, color)
+#define ScopedGpuZoneAutoCollect(cmd, name)
 #endif // TRACY_ENABLE

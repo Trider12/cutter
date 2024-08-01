@@ -776,7 +776,7 @@ static void generateImageMips(Image &image)
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
     beginOneTimeCmd(graphicsCmd);
     {
-        ScopedGpuZone(graphicsCmd, "Mips Blit");
+        ScopedGpuZoneAutoCollect(graphicsCmd, "Mips Blit");
         generateMipsBlit(graphicsCmd, gpuImage);
     }
     endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
@@ -896,7 +896,7 @@ static void normalizeNormalMap(Image &normalMapImage)
     Cmd computeCmd = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd);
     {
-        ScopedGpuZone(computeCmd, "Normalize normal map");
+        ScopedGpuZoneAutoCollect(computeCmd, "Normalize normal map");
         ImageBarrier imageBarrier {};
         imageBarrier.image = normalMapGpuImage;
         imageBarrier.srcStageMask = StageFlags::None;
@@ -933,7 +933,7 @@ void computeBrdfLut(const char *brdfLutPath)
     Cmd computeCmd = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd);
     {
-        ScopedGpuZone(computeCmd, "Compute BRDF LUT");
+        ScopedGpuZoneAutoCollect(computeCmd, "Compute BRDF LUT");
         ImageBarrier imageBarrier {};
         imageBarrier.image = brdfLutGpuImage;
         imageBarrier.srcStageMask = StageFlags::None;
@@ -1031,7 +1031,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     Cmd computeCmd1 = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd1);
     {
-        ScopedGpuZone(computeCmd1, "Compute skybox");
+        ScopedGpuZoneAutoCollect(computeCmd1, "Compute skybox");
         imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].srcStageMask = StageFlags::None;
         imageBarriers[0].dstStageMask = StageFlags::ComputeShader;
@@ -1062,7 +1062,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
     beginOneTimeCmd(graphicsCmd);
     {
-        ScopedGpuZone(graphicsCmd, "Mips blit");
+        ScopedGpuZoneAutoCollect(graphicsCmd, "Mips blit");
         imageBarriers[0] = {};
         imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].dstStageMask = StageFlags::Blit;
@@ -1099,7 +1099,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         vkCmdDispatch(computeCmd2.commandBuffer, computeIrradianceMapWorkGroupCount * 6, computeIrradianceMapWorkGroupCount, 1);
     }
     {
-        ScopedGpuZone(computeCmd2, "Compute prefiltered");
+        ScopedGpuZoneAutoCollect(computeCmd2, "Compute prefiltered");
         vkCmdBindPipeline(computeCmd2.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePrefilteredMapPipeline);
         vkCmdPushConstants(computeCmd2.commandBuffer, commonPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(prefilteredMapLevelCount), &prefilteredMapLevelCount);
         vkCmdDispatch(computeCmd2.commandBuffer, computePrefilteredMapWorkGroupCount * 6, computePrefilteredMapWorkGroupCount, 1);
