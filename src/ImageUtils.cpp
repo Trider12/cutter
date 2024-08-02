@@ -770,7 +770,7 @@ static void generateImageMips(Image &image)
     queueFamily = QueueFamily::Compute;
     imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 #endif
-    GpuImage gpuImage = createAndCopyGpuImage(image, queueFamily, usageFlags, image.faceCount == 1 ? GpuImageType::Image2D : GpuImageType::Image2DCubemap, imageLayout);
+    GpuImage gpuImage = createAndCopyGpuImage(image, queueFamily, usageFlags, image.faceCount == 1 ? GpuImageType::Image2D : GpuImageType::Image2DCubemap, SharingMode::Exclusive, imageLayout);
 
 #ifdef MIPS_BLIT
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
@@ -886,7 +886,7 @@ static void normalizeNormalMap(Image &normalMapImage)
     ASSERT(normalMapImage.format == VK_FORMAT_R8G8B8A8_UNORM);
     ASSERT(normalMapImage.purpose == ImagePurpose::Normal);
 
-    GpuImage normalMapGpuImage = createAndCopyGpuImage(normalMapImage, QueueFamily::Compute, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, GpuImageType::Image2D, VK_IMAGE_LAYOUT_GENERAL);
+    GpuImage normalMapGpuImage = createAndCopyGpuImage(normalMapImage, QueueFamily::Compute, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT, GpuImageType::Image2D, SharingMode::Exclusive, VK_IMAGE_LAYOUT_GENERAL);
     setGpuImageName(normalMapGpuImage, NAMEOF(normalMapGpuImage));
     VkDescriptorImageInfo imageInfo { nullptr, normalMapGpuImage.imageView, VK_IMAGE_LAYOUT_GENERAL };
     VkWriteDescriptorSet write = initWriteDescriptorSetImage(commonDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &imageInfo);

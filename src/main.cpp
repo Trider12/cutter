@@ -233,6 +233,7 @@ VkPipelineLayout computePipelineLayout;
 
 GpuBuffer modelBuffer;
 GpuBuffer globalUniformBuffer;
+GpuBuffer drawIndirectBuffer;
 
 GpuImage modelTextures[MAX_MODEL_TEXTURES];
 uint8_t modelTextureCount;
@@ -417,6 +418,7 @@ void initRenderTargets()
         windowExtent, 1,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         GpuImageType::Image2D,
+        SharingMode::Exclusive,
         VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
@@ -779,12 +781,18 @@ void loadModel(const char *sceneDirPath)
             0);
     }
 
+    if (!drawIndirectBuffer.buffer)
+    {
+        drawIndirectBuffer = createGpuBuffer(sizeof(VkDrawIndirectCommand),
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, SharingMode::Concurrent);
+    }
+
     memcpy((char *)stagingBuffer.mappedData + indicesOffset, model.indices.data(), indicesSize);
     memcpy((char *)stagingBuffer.mappedData + positionsOffset, model.positions.data(), positionsSize);
     memcpy((char *)stagingBuffer.mappedData + normalUvsOffset, model.normalUvs.data(), normalUvsSize);
     memcpy((char *)stagingBuffer.mappedData + transformsOffset, model.transforms.data(), transformsSize);
     memcpy((char *)stagingBuffer.mappedData + materialsOffset, model.materials.data(), materialsSize);
-
     VkBufferCopy copies[]
     {
         {indicesOffset, maxIndicesOffset, indicesSize},
@@ -794,6 +802,16 @@ void loadModel(const char *sceneDirPath)
         {materialsOffset, maxMaterialsOffset, materialsSize}
     };
     copyStagingBufferToBuffer(modelBuffer, copies, countOf(copies), QueueFamily::Graphics);
+
+    VkDrawIndirectCommand drawIndirectCommand;
+    drawIndirectCommand.vertexCount = (uint32_t)model.indices.size();
+    drawIndirectCommand.instanceCount = 1;
+    drawIndirectCommand.firstVertex = 0;
+    drawIndirectCommand.firstInstance = 0;
+
+    memcpy(stagingBuffer.mappedData, &drawIndirectCommand, sizeof(VkDrawIndirectCommand));
+    copies[0] = { 0, 0, sizeof(VkDrawIndirectCommand) };
+    copyStagingBufferToBuffer(drawIndirectBuffer, copies, 1);
 
     VkDescriptorBufferInfo bufferInfos[]
     {
@@ -965,6 +983,7 @@ void terminateScene()
 {
     destroyGpuBuffer(modelBuffer);
     destroyGpuBuffer(globalUniformBuffer);
+    destroyGpuBuffer(drawIndirectBuffer);
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
@@ -1212,7 +1231,7 @@ void drawModel(Cmd cmd)
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
     uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
     vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
-    vkCmdDraw(cmd.commandBuffer, (uint32_t)model.indices.size(), 1, 0, 0);
+    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, 0, 1, 0);
 }
 
 void drawSkybox(Cmd cmd)

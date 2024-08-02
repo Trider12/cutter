@@ -110,9 +110,12 @@ void freeCmd(Cmd cmd)
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
-    VmaAllocationCreateFlags createFlags)
+    VmaAllocationCreateFlags createFlags,
+    SharingMode sharingMode)
 {
-    VkBufferCreateInfo bufferCreateInfo = initBufferCreateInfo(size, usageFlags);
+    uint32_t queueFamilyIndices[] { graphicsQueueFamilyIndex, computeQueueFamilyIndex, transferQueueFamilyIndex };
+    VkBufferCreateInfo bufferCreateInfo = initBufferCreateInfo(size, usageFlags,
+        queueFamilyIndices, sharingMode == SharingMode::Exclusive ? 0 : countOf(queueFamilyIndices));
 
     VmaAllocationCreateInfo allocationCreateInfo {};
     allocationCreateInfo.flags = createFlags;
@@ -129,7 +132,7 @@ GpuBuffer createGpuBuffer(uint32_t size,
     return buffer;
 }
 
-GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, GpuImageType type, VkImageAspectFlags aspectFlags)
+GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, GpuImageType type, SharingMode sharingMode, VkImageAspectFlags aspectFlags)
 {
     VkExtent3D imageExtent = { extent.width, extent.height, 1 };
     GpuImage image;
@@ -139,7 +142,10 @@ GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, V
     image.layerCount = 1;
     image.type = type;
 
-    VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 1, usageFlags);
+    uint32_t queueFamilyIndices[] { graphicsQueueFamilyIndex, computeQueueFamilyIndex, transferQueueFamilyIndex };
+
+    VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 1, usageFlags,
+        queueFamilyIndices, sharingMode == SharingMode::Exclusive ? 0 : countOf(queueFamilyIndices));
     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
 
     switch (type)
@@ -236,10 +242,10 @@ void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFa
     memcpy(dstImage.data, stagingBuffer.mappedData, dstImage.dataSize);
 }
 
-GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, GpuImageType type, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
+GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, GpuImageType type, SharingMode sharingMode, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
 {
     ASSERT(image.faceCount == 1 || image.faceCount == 6);
-    GpuImage gpuImage = createGpuImage(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, type, aspectFlags);
+    GpuImage gpuImage = createGpuImage(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, type, sharingMode, aspectFlags);
     copyImage(image, gpuImage, dstQueueFamily, dstLayout);
     return gpuImage;
 }
@@ -390,7 +396,7 @@ void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uin
 
     Cmd transferCmd = allocateCmd(transferCommandPool);
 
-    if (dstQueueFamily == QueueFamily::Transfer)
+    if (dstQueueFamily == QueueFamily::None || dstQueueFamily == QueueFamily::Transfer)
     {
         beginOneTimeCmd(transferCmd);
         beginCmdLabel(transferCmd, __FUNCTION__);
@@ -463,7 +469,7 @@ static void copyStagingBufferToImage(GpuImage &image, VkBufferImageCopy *copyReg
     ZoneScoped;
     Cmd transferCmd = allocateCmd(transferCommandPool);
 
-    if (dstQueueFamily == QueueFamily::Transfer)
+    if (dstQueueFamily == QueueFamily::None || dstQueueFamily == QueueFamily::Transfer)
     {
         beginOneTimeCmd(transferCmd);
         beginCmdLabel(transferCmd, __FUNCTION__);

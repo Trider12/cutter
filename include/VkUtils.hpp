@@ -29,9 +29,9 @@ VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBuffe
 
 VkPresentInfoKHR initPresentInfo(const VkSwapchainKHR *swapchain, const VkSemaphore *waitSemaphore, const uint32_t *imageIndex);
 
-VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageFlags);
+VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageFlags, const uint32_t *queueFamilyIndices = nullptr, uint32_t queueFamilyIndexCount = 0);
 
-VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags);
+VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, const uint32_t *queueFamilyIndices = nullptr, uint32_t queueFamilyIndexCount = 0);
 
 VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask, uint32_t baseMipLevel = 0, uint32_t levelCount = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 0);
 

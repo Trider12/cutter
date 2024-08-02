@@ -115,18 +115,23 @@ VkPresentInfoKHR initPresentInfo(const VkSwapchainKHR *swapchain, const VkSemaph
     return presentInfo;
 }
 
-VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageFlags)
+VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageFlags, const uint32_t *queueFamilyIndices, uint32_t queueFamilyIndexCount)
 {
+    ASSERT(queueFamilyIndices && queueFamilyIndexCount || !queueFamilyIndexCount);
     VkBufferCreateInfo bufferCreateInfo {};
     bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferCreateInfo.size = size;
     bufferCreateInfo.usage = usageFlags;
+    bufferCreateInfo.sharingMode = queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+    bufferCreateInfo.queueFamilyIndexCount = queueFamilyIndexCount;
+    bufferCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
 
     return bufferCreateInfo;
 }
 
-VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags)
+VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, const uint32_t *queueFamilyIndices, uint32_t queueFamilyIndexCount)
 {
+    ASSERT(queueFamilyIndices && queueFamilyIndexCount || !queueFamilyIndexCount);
     VkImageCreateInfo imageCreateInfo {};
     imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -137,6 +142,9 @@ VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32
     imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCreateInfo.usage = usageFlags;
+    imageCreateInfo.sharingMode = queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+    imageCreateInfo.queueFamilyIndexCount = queueFamilyIndexCount;
+    imageCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
 
     return imageCreateInfo;
 }

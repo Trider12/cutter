@@ -59,16 +59,20 @@ Cmd allocateCmd(VkCommandPool pool);
 
 void freeCmd(Cmd cmd);
 
+enum class SharingMode { Exclusive = 0, Concurrent = 1 };
+
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
-    VmaAllocationCreateFlags createFlags);
+    VmaAllocationCreateFlags createFlags,
+    SharingMode sharingMode = SharingMode::Exclusive);
 
 GpuImage createGpuImage(VkFormat format,
     VkExtent2D extent,
     uint8_t mipLevels,
     VkImageUsageFlags usageFlags,
     GpuImageType type = GpuImageType::Image2D,
+    SharingMode sharingMode = SharingMode::Exclusive,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -79,6 +83,7 @@ GpuImage createAndCopyGpuImage(const Image &image,
     QueueFamily dstQueueFamily,
     VkImageUsageFlags usageFlags,
     GpuImageType type = GpuImageType::Image2D,
+    SharingMode sharingMode = SharingMode::Exclusive,
     VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -98,7 +103,7 @@ enum class StageFlags : uint16_t
     Blit = 1 << 6,
     Resolve = 1 << 7
 };
-defineEnumOperators(StageFlags, uint16_t)
+defineEnumOperators(StageFlags, uint16_t);
 
 enum class AccessFlags : uint8_t
 {
@@ -106,7 +111,7 @@ enum class AccessFlags : uint8_t
     Read = 1 << 0,
     Write = 1 << 1
 };
-defineEnumOperators(AccessFlags, uint8_t)
+defineEnumOperators(AccessFlags, uint8_t);
 
 EnumBool(WaitForFence);
 
@@ -156,4 +161,4 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 
-void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily);
+void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily = QueueFamily::None);
