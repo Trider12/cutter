@@ -7,7 +7,7 @@
 #include <shaderc/shaderc.h>
 
 static shaderc_compiler_t compiler;
-static shaderc_compile_options_t options;
+static shaderc_compile_options_t options[3];
 
 static shaderc_include_result *shadercIncludeResolve(void *userData,
     const char *requestedSource,
@@ -49,25 +49,34 @@ static void shadercIncludeResultRelease(void *userData, shaderc_include_result *
 void initShaderCompiler()
 {
     compiler = shaderc_compiler_initialize();
-    options = shaderc_compile_options_initialize();
-    shaderc_compile_options_set_source_language(options, shaderc_source_language_glsl);
-    shaderc_compile_options_set_forced_version_profile(options, 450, shaderc_profile_none);
-    shaderc_compile_options_set_include_callbacks(options, shadercIncludeResolve, shadercIncludeResultRelease, nullptr);
-    shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
-    shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_5);
-    shaderc_compile_options_set_warnings_as_errors(options);
+    options[0] = shaderc_compile_options_initialize();
+    shaderc_compile_options_set_source_language(options[0], shaderc_source_language_glsl);
+    shaderc_compile_options_set_forced_version_profile(options[0], 450, shaderc_profile_none);
+    shaderc_compile_options_set_include_callbacks(options[0], shadercIncludeResolve, shadercIncludeResultRelease, nullptr);
+    shaderc_compile_options_set_target_env(options[0], shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    shaderc_compile_options_set_target_spirv(options[0], shaderc_spirv_version_1_5);
+    shaderc_compile_options_set_warnings_as_errors(options[0]);
 #ifdef DEBUG
-    shaderc_compile_options_set_generate_debug_info(options);
-    shaderc_compile_options_add_macro_definition(options, "DEBUG", 5, nullptr, 0);
+    shaderc_compile_options_set_generate_debug_info(options[0]);
+    shaderc_compile_options_add_macro_definition(options[0], "DEBUG", 5, nullptr, 0);
 #else
-    shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_performance);
+    shaderc_compile_options_set_optimization_level(options[0], shaderc_optimization_level_performance);
 #endif // DEBUG
+
+    options[1] = shaderc_compile_options_clone(options[0]);
+    options[2] = shaderc_compile_options_clone(options[0]);
+
+    shaderc_compile_options_add_macro_definition(options[0], "VERTEX", 6, nullptr, 0);
+    shaderc_compile_options_add_macro_definition(options[1], "FRAGMENT", 8, nullptr, 0);
+    shaderc_compile_options_add_macro_definition(options[2], "COMPUTE", 7, nullptr, 0);
 }
 
 void terminateShaderCompiler()
 {
     shaderc_compiler_release(compiler);
-    shaderc_compile_options_release(options);
+    shaderc_compile_options_release(options[0]);
+    shaderc_compile_options_release(options[1]);
+    shaderc_compile_options_release(options[2]);
 }
 
 void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, ShaderType type)
@@ -75,7 +84,8 @@ void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, S
     uint32_t fileSize = readFile(shaderFilename, nullptr, 0);
     char *fileData = new char[fileSize];
     readFile(shaderFilename, (uint8_t *)fileData, fileSize);
-    shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, fileData, fileSize, (shaderc_shader_kind)type, shaderFilename, "main", options);
+
+    shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, fileData, fileSize, (shaderc_shader_kind)type, shaderFilename, "main", options[(uint8_t)type]);
     shaderc_compilation_status status = shaderc_result_get_compilation_status(result);
 
     if (status == shaderc_compilation_status_compilation_error)

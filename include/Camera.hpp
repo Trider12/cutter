@@ -12,7 +12,7 @@ public:
     void update(float delta);
     void lookAt(glm::vec3 target);
     glm::vec3 &getPosition();
-    glm::mat4 getWorldMatrix() const;
+    glm::mat4 getCameraMatrix() const;
     glm::mat4 getViewMatrix() const;
 
 private:

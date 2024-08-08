@@ -73,6 +73,7 @@ void initGraphics()
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    setGpuBufferName(stagingBuffer, NAMEOF(stagingBuffer));
 
     VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, true);
     vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &graphicsCommandPool));
@@ -110,12 +111,10 @@ void freeCmd(Cmd cmd)
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
-    VmaAllocationCreateFlags createFlags,
-    SharingMode sharingMode)
+    VmaAllocationCreateFlags createFlags)
 {
     uint32_t queueFamilyIndices[] { graphicsQueueFamilyIndex, computeQueueFamilyIndex, transferQueueFamilyIndex };
-    VkBufferCreateInfo bufferCreateInfo = initBufferCreateInfo(size, usageFlags,
-        queueFamilyIndices, sharingMode == SharingMode::Exclusive ? 0 : countOf(queueFamilyIndices));
+    VkBufferCreateInfo bufferCreateInfo = initBufferCreateInfo(size, usageFlags, queueFamilyIndices, countOf(queueFamilyIndices));
 
     VmaAllocationCreateInfo allocationCreateInfo {};
     allocationCreateInfo.flags = createFlags;
@@ -390,78 +389,35 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
     }
 }
 
-void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily)
+void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount)
 {
     ZoneScoped;
-
     Cmd transferCmd = allocateCmd(transferCommandPool);
-
-    if (dstQueueFamily == QueueFamily::None || dstQueueFamily == QueueFamily::Transfer)
-    {
-        beginOneTimeCmd(transferCmd);
-        beginCmdLabel(transferCmd, __FUNCTION__);
-        vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer.buffer, copyRegionCount, copyRegions);
-        endCmdLabel(transferCmd);
-        endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
-        freeCmd(transferCmd);
-
-        return;
-    }
-
-    VkQueue dstQueue;
-    Cmd dstCmd;
-    StageFlags dstStageMask;
-
-    switch (dstQueueFamily)
-    {
-    case QueueFamily::Graphics:
-        dstQueue = graphicsQueue;
-        dstCmd = allocateCmd(graphicsCommandPool);
-        dstStageMask = StageFlags::VertexShader | StageFlags::FragmentShader;
-        break;
-    case QueueFamily::Compute:
-        dstQueue = computeQueue;
-        dstCmd = allocateCmd(computeCommandPool);
-        dstStageMask = StageFlags::ComputeShader;
-        break;
-    default:
-        ASSERT(false);
-        return;
-    }
-
-    VkSemaphore semaphore;
-    VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
-    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
-    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
-    BufferBarrier bufferBarrier {};
-
     beginOneTimeCmd(transferCmd);
     beginCmdLabel(transferCmd, __FUNCTION__);
     vkCmdCopyBuffer(transferCmd.commandBuffer, stagingBuffer.buffer, buffer.buffer, copyRegionCount, copyRegions);
-    bufferBarrier.buffer = buffer;
-    bufferBarrier.srcStageMask = StageFlags::Copy;
-    bufferBarrier.srcAccessMask = AccessFlags::Write;
-    bufferBarrier.srcQueueFamily = QueueFamily::Transfer;
-    bufferBarrier.dstQueueFamily = dstQueueFamily;
-    pipelineBarrier(transferCmd.commandBuffer, &bufferBarrier, 1, nullptr, 0);
     endCmdLabel(transferCmd);
-    endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
-
-    beginOneTimeCmd(dstCmd);
-    beginCmdLabel(dstCmd, "QFO Acquire");
-    bufferBarrier = {};
-    bufferBarrier.buffer = buffer;
-    bufferBarrier.dstStageMask = dstStageMask;
-    bufferBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
-    bufferBarrier.srcQueueFamily = QueueFamily::Transfer;
-    bufferBarrier.dstQueueFamily = dstQueueFamily;
-    pipelineBarrier(dstCmd, &bufferBarrier, 1, nullptr, 0);
-    endCmdLabel(dstCmd);
-    endAndSubmitOneTimeCmd(dstCmd, dstQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
-
-    vkDestroySemaphore(device, semaphore, nullptr);
+    endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
     freeCmd(transferCmd);
-    freeCmd(dstCmd);
+}
+
+void copyBufferToStagingBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount)
+{
+    ZoneScoped;
+    Cmd transferCmd = allocateCmd(transferCommandPool);
+    BufferBarrier bufferBarrier {}; // this barrier is needed because copyStagingBufferToImage has no fence to make vkCmdCopyBufferToImage changes visible
+    bufferBarrier.buffer = stagingBuffer;
+    bufferBarrier.srcStageMask = StageFlags::Copy;
+    bufferBarrier.dstStageMask = StageFlags::Copy;
+    bufferBarrier.srcAccessMask = AccessFlags::Read;
+    bufferBarrier.dstAccessMask = AccessFlags::Write;
+    beginOneTimeCmd(transferCmd);
+    beginCmdLabel(transferCmd, __FUNCTION__);
+    pipelineBarrier(transferCmd, &bufferBarrier, 1, nullptr, 0);
+    vkCmdCopyBuffer(transferCmd.commandBuffer, buffer.buffer, stagingBuffer.buffer, copyRegionCount, copyRegions);
+    endCmdLabel(transferCmd);
+    endAndSubmitOneTimeCmd(transferCmd, transferQueue, nullptr, nullptr, WaitForFence::Yes);
+    freeCmd(transferCmd);
 }
 
 static void copyStagingBufferToImage(GpuImage &image, VkBufferImageCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily, VkImageLayout dstLayout)
@@ -578,7 +534,7 @@ static void copyImageToStagingBuffer(const GpuImage &image, VkBufferImageCopy *c
 {
     ZoneScoped;
     Cmd transferCmd = allocateCmd(transferCommandPool);
-    BufferBarrier bufferBarrier {};
+    BufferBarrier bufferBarrier {}; // this barrier is needed because copyStagingBufferToImage has no fence to make vkCmdCopyBufferToImage changes visible
     bufferBarrier.buffer = stagingBuffer;
     bufferBarrier.srcStageMask = StageFlags::Copy;
     bufferBarrier.dstStageMask = StageFlags::Copy;

@@ -8,6 +8,7 @@ void initRenderdoc();
 void startRenderdocCapture();
 void endRenderdocCapture();
 
+void setGpuBufferName(GpuBuffer &gpuBuffer, const char *name);
 void setGpuImageName(GpuImage &gpuImage, const char *name);
 
 inline void beginCmdLabel(Cmd cmd, const char *name)
@@ -24,6 +25,7 @@ inline void endCmdLabel(Cmd cmd)
 inline void initRenderdoc() {}
 inline void startRenderdocCapture() {}
 inline void endRenderdocCapture() {}
+inline void setGpuBufferName(GpuBuffer &, const char *) {}
 inline void setGpuImageName(GpuImage &, const char *) {}
 inline void beginCmdLabel(Cmd, const char *) {}
 inline void endCmdLabel(Cmd) {}

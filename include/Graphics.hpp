@@ -64,8 +64,7 @@ enum class SharingMode { Exclusive = 0, Concurrent = 1 };
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
-    VmaAllocationCreateFlags createFlags,
-    SharingMode sharingMode = SharingMode::Exclusive);
+    VmaAllocationCreateFlags createFlags);
 
 GpuImage createGpuImage(VkFormat format,
     VkExtent2D extent,
@@ -161,4 +160,6 @@ void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoK
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 
-void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount, QueueFamily dstQueueFamily = QueueFamily::None);
+void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount);
+
+void copyBufferToStagingBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount);

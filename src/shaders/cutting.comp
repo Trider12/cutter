@@ -1,0 +1,159 @@
+#include "modelDescriptorSet.h"
+#include "utils.h"
+
+layout (local_size_x = 256) in;
+
+layout(push_constant) uniform ConstantBlock
+{
+    CuttingData cuttingData;
+};
+
+void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], ivec3 normals[3], vec2 uvs[3], uint16_t transformIndex);
+
+void main()
+{
+    uint triangleIndex = gl_GlobalInvocationID.x * 3;
+    if(triangleIndex >= drawData[cuttingData.drawDataReadIndex].indexCount)
+        return;
+
+    uint drawDataWriteIndex = cuttingData.drawDataReadIndex ^ 1;
+    uvec3 triangleIndices = uvec3(readIndices[triangleIndex + 0], readIndices[triangleIndex + 1], readIndices[triangleIndex + 2]);
+    Position trianglePositions[3] = Position[](positions[triangleIndices[0]], positions[triangleIndices[1]], positions[triangleIndices[2]]);
+
+    vec3 localPositions[3] = vec3[](
+        vec3(trianglePositions[0].x, trianglePositions[0].y, trianglePositions[0].z),
+        vec3(trianglePositions[1].x, trianglePositions[1].y, trianglePositions[1].z),
+        vec3(trianglePositions[2].x, trianglePositions[2].y, trianglePositions[2].z));
+
+    TransformData tds[3] = TransformData[](
+        transforms[trianglePositions[0].transformIndex],
+        transforms[trianglePositions[1].transformIndex],
+        transforms[trianglePositions[2].transformIndex]);
+
+    vec4 worldPositions[3] = vec4[](
+        cameraData.sceneMat * tds[0].toWorldMat * vec4(localPositions[0], 1.f),
+        cameraData.sceneMat * tds[1].toWorldMat * vec4(localPositions[1], 1.f),
+        cameraData.sceneMat * tds[2].toWorldMat * vec4(localPositions[2], 1.f));
+
+    vec3 distsToPlane = vec3(dot(worldPositions[0], cuttingData.normalAndD), dot(worldPositions[1], cuttingData.normalAndD), dot(worldPositions[2], cuttingData.normalAndD));
+    vec3 distsA = distsToPlane - 0.5f * cuttingData.width; // plane A: same normal, move by `0.5f * width` along it
+    vec3 distsB = -distsToPlane - 0.5f * cuttingData.width; // plane B: reverse normal, move by `0.5f * width` along it
+    bvec3 signsA = greaterThan(distsA, vec3(0.f));
+    bvec3 signsB = greaterThan(distsB, vec3(0.f));
+
+    if(all(not(signsA)) && all(not(signsB))) // between A and B - discard
+        return;
+
+    if(all(signsA) || all(signsB)) // outside A and B - keep as is
+    {
+        uint size = atomicAdd(drawData[drawDataWriteIndex].indexCount, 3);
+        writeIndices[size + 0] = triangleIndices[0];
+        writeIndices[size + 1] = triangleIndices[1];
+        writeIndices[size + 2] = triangleIndices[2];
+        return;
+    }
+
+    ivec3 normals[3] = ivec3[](
+        ivec3(normalUvs[triangleIndices[0]].x, normalUvs[triangleIndices[0]].y, normalUvs[triangleIndices[0]].z),
+        ivec3(normalUvs[triangleIndices[1]].x, normalUvs[triangleIndices[1]].y, normalUvs[triangleIndices[1]].z),
+        ivec3(normalUvs[triangleIndices[2]].x, normalUvs[triangleIndices[2]].y, normalUvs[triangleIndices[2]].z));
+
+    vec2 uvs[3] = vec2[](
+        vec2(normalUvs[triangleIndices[0]].u, normalUvs[triangleIndices[0]].v),
+        vec2(normalUvs[triangleIndices[1]].u, normalUvs[triangleIndices[1]].v),
+        vec2(normalUvs[triangleIndices[2]].u, normalUvs[triangleIndices[2]].v));
+
+    if(any(signsA)) // is intersecting A
+        planeCut(drawDataWriteIndex, triangleIndices, signsA, distsA, localPositions, normals, uvs, positions[0].transformIndex);
+
+    if(any(signsB)) // is intersecting B
+        planeCut(drawDataWriteIndex, triangleIndices, signsB, distsB, localPositions, normals, uvs, positions[0].transformIndex);
+}
+
+void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], ivec3 normals[3], vec2 uvs[3], uint16_t transformIndex)
+{
+    //                     |
+    //                     |
+    //                     |        /|  prevPoint
+    //                     |      /  |
+    //                     |    /    |
+    //         N           |  /      |
+    //      <------    p2  |/        |
+    //                    /|         |
+    //                  /  |         |
+    //                /    |         |
+    //              /      |         |
+    //            /        |         |
+    // lonePoint  ---------|----------  nextPoint
+    //                 p1  |
+    //                     |
+
+    uint lonePoint = signs[0] == signs[1] ? 2 : signs[0] == signs[2] ? 1 : 0;
+    uint nextPoint = (lonePoint + 1) % 3;
+    uint prevPoint = (lonePoint + 2) % 3;
+
+    float lerpNext = dists[lonePoint] / (dists[lonePoint] - dists[nextPoint]);
+    float lerpPrev = dists[lonePoint] / (dists[lonePoint] - dists[prevPoint]);
+
+    vec3 pos1  = mix(localPositions[lonePoint], localPositions[nextPoint], lerpNext);
+    vec3 norm1 = mix(normals[lonePoint],        normals[nextPoint],        lerpNext);
+    vec2 uv1   = mix(uvs[lonePoint],            uvs[nextPoint],            lerpNext);
+    vec3 pos2  = mix(localPositions[lonePoint], localPositions[prevPoint], lerpPrev);
+    vec3 norm2 = mix(normals[lonePoint],        normals[prevPoint],        lerpPrev);
+    vec2 uv2   = mix(uvs[lonePoint],            uvs[prevPoint],            lerpPrev);
+
+    Position p1;
+    p1.x = float16_t(pos1.x);
+    p1.y = float16_t(pos1.y);
+    p1.z = float16_t(pos1.z);
+    p1.transformIndex = transformIndex;
+    Position p2;
+    p2.x = float16_t(pos2.x);
+    p2.y = float16_t(pos2.y);
+    p2.z = float16_t(pos2.z);
+    p2.transformIndex = transformIndex;
+
+    NormalUv nuv1;
+    nuv1.x = int8_t(norm1.x);
+    nuv1.y = int8_t(norm1.y);
+    nuv1.z = int8_t(norm1.z);
+    nuv1.u = float16_t(uv1.x);
+    nuv1.v = float16_t(uv1.y);
+    NormalUv nuv2;
+    nuv2.x = int8_t(norm2.x);
+    nuv2.y = int8_t(norm2.y);
+    nuv2.z = int8_t(norm2.z);
+    nuv2.u = float16_t(uv2.x);
+    nuv2.v = float16_t(uv2.y);
+
+    uint index1 = atomicAdd(drawData[drawDataWriteIndex].vertexCount, 2);
+    uint index2 = index1 + 1;
+
+    positions[index1] = p1;
+    positions[index2] = p2;
+    normalUvs[index1] = nuv1;
+    normalUvs[index2] = nuv2;
+
+    uint lonePointIndex = triangleIndices[lonePoint];
+    uint nextPointIndex = triangleIndices[nextPoint];
+    uint prevPointIndex = triangleIndices[prevPoint];
+
+    // keep positive geometry, discard negative geometry
+    if(signs[lonePoint]) // add the single triangle
+    {
+        uint size = atomicAdd(drawData[drawDataWriteIndex].indexCount, 3);
+        writeIndices[size + 0] = lonePointIndex;
+        writeIndices[size + 1] = index1;
+        writeIndices[size + 2] = index2;
+    }
+    else // add the two other triangles
+    {
+        uint size = atomicAdd(drawData[drawDataWriteIndex].indexCount, 6);
+        writeIndices[size + 0] = index1;
+        writeIndices[size + 1] = nextPointIndex;
+        writeIndices[size + 2] = index2;
+        writeIndices[size + 3] = nextPointIndex;
+        writeIndices[size + 4] = prevPointIndex;
+        writeIndices[size + 5] = index2;
+    }
+}

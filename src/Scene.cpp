@@ -150,7 +150,6 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
         cgltf_node_transform_world(node, glm::value_ptr(td.toWorldMat));
         td.toWorldMat *= scale;
         td.toWorldMat[3][3] /= scale;
-        td.toLocalMat = glm::inverse(td.toWorldMat);
         scene.transforms.push_back(td);
 
         cgltf_material *material = nullptr;

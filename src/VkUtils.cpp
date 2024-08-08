@@ -88,18 +88,23 @@ VkSemaphoreSubmitInfoKHR initSemaphoreSubmitInfo(VkSemaphore semaphore, VkPipeli
     return semaphoreSubmitInfo;
 }
 
-VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBufferSubmitInfo, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo)
+VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBufferSubmitInfo, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfos, uint32_t waitSemaphoreSubmitInfoCount, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfos, uint32_t signalSemaphoreSubmitInfoCount)
 {
     VkSubmitInfo2KHR submitInfo {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR;
-    submitInfo.waitSemaphoreInfoCount = !!waitSemaphoreSubmitInfo;
-    submitInfo.pWaitSemaphoreInfos = waitSemaphoreSubmitInfo;
-    submitInfo.signalSemaphoreInfoCount = !!signalSemaphoreSubmitInfo;
-    submitInfo.pSignalSemaphoreInfos = signalSemaphoreSubmitInfo;
+    submitInfo.waitSemaphoreInfoCount = waitSemaphoreSubmitInfoCount;
+    submitInfo.pWaitSemaphoreInfos = waitSemaphoreSubmitInfos;
+    submitInfo.signalSemaphoreInfoCount = signalSemaphoreSubmitInfoCount;
+    submitInfo.pSignalSemaphoreInfos = signalSemaphoreSubmitInfos;
     submitInfo.commandBufferInfoCount = !!commandBufferSubmitInfo;
     submitInfo.pCommandBufferInfos = commandBufferSubmitInfo;
 
     return submitInfo;
+}
+
+VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBufferSubmitInfo, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo)
+{
+    return initSubmitInfo(commandBufferSubmitInfo, waitSemaphoreSubmitInfo, !!waitSemaphoreSubmitInfo, signalSemaphoreSubmitInfo, !!signalSemaphoreSubmitInfo);
 }
 
 VkPresentInfoKHR initPresentInfo(const VkSwapchainKHR *swapchain, const VkSemaphore *waitSemaphore, const uint32_t *imageIndex)

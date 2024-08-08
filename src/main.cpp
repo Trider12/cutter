@@ -95,7 +95,7 @@ struct ShaderTable
     defineShader(computeIrradianceMap, ".comp", Compute);
     defineShader(computePrefilteredMap, ".comp", Compute);
     defineShader(normalizeNormalMap, ".comp", Compute);
-    defineShader(compute, ".comp", Compute);
+    defineShader(cutting, ".comp", Compute);
 } shaderTable;
 
 const struct SceneImportInfo
@@ -219,8 +219,6 @@ VkDescriptorSetLayout texturesDescriptorSetLayout;
 VkDescriptorSet texturesDescriptorSet;
 VkDescriptorSetLayout skyboxDescriptorSetLayout;
 VkDescriptorSet skyboxDescriptorSet;
-VkDescriptorSetLayout computeDescriptorSetLayout;
-VkDescriptorSet computeDescriptorSet;
 
 VkPipeline modelPipeline;
 VkPipelineLayout modelPipelineLayout;
@@ -228,8 +226,8 @@ VkPipeline skyboxPipeline;
 VkPipelineLayout skyboxPipelineLayout;
 VkPipeline linePipeline;
 VkPipelineLayout linePipelineLayout;
-VkPipeline computePipeline;
-VkPipelineLayout computePipelineLayout;
+VkPipeline cuttingPipeline;
+VkPipelineLayout cuttingPipelineLayout;
 
 GpuBuffer modelBuffer;
 GpuBuffer globalUniformBuffer;
@@ -258,9 +256,14 @@ const uint8_t maxFramesInFlight = 2;
 uint8_t frameIndex = 0;
 FrameData frames[maxFramesInFlight];
 
+Cmd computeCmd;
+VkFence computeFence;
+
 FlyCamera camera;
 Scene model;
 LightingData lightData;
+DrawIndirectData drawIndirectReadData;
+uint8_t drawDataReadIndex = 0; // 0 or 1
 
 bool rotateScene = false;
 float sceneRotationTime = 0.f;
@@ -274,12 +277,14 @@ bool cursorCaptured = false;
 enum class CutState : uint8_t
 {
     None = 0,
-    CutStarted,
-    CutFinished
+    CutLineStarted,
+    CutLineFinished,
+    CuttingInProgress
 } cutState;
 
 const float defaultLineWidth = 30.f;
 LineData lineData;
+CuttingData cuttingData;
 
 uint32_t debugFlags;
 
@@ -306,6 +311,7 @@ void initVulkan()
     vkVerify(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
     VkPhysicalDeviceFeatures features {};
+    features.shaderInt16 = true;
     features.shaderSampledImageArrayDynamicIndexing = true;
     features.textureCompressionBC = true;
     VkPhysicalDeviceVulkan11Features features11 {};
@@ -314,6 +320,8 @@ void initVulkan()
     features11.uniformAndStorageBuffer16BitAccess = true;
     VkPhysicalDeviceVulkan12Features features12 {};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    features12.shaderFloat16 = true;
+    features12.shaderInt8 = true;
     features12.storageBuffer8BitAccess = true;
     features12.uniformAndStorageBuffer8BitAccess = true;
     features12.uniformBufferStandardLayout = true;
@@ -449,14 +457,21 @@ void recreateRenderTargets()
 void initFrameData()
 {
     ZoneScoped;
-    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, false);
-    VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
+    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, true);
+    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frames[0].cmd.commandPool));
+    commandPoolCreateInfo = initCommandPoolCreateInfo(computeQueueFamilyIndex, true);
+    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &computeCmd.commandPool));
+    computeCmd = allocateCmd(computeCmd.commandPool);
+
+    VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo();
+    vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &computeFence));
+
+    fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
 
     for (FrameData &frame : frames)
     {
-        vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frame.cmd.commandPool));
-        frame.cmd = allocateCmd(frame.cmd.commandPool);
+        frame.cmd = allocateCmd(frames[0].cmd.commandPool);
 
         vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &frame.renderFinishedFence));
         vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frame.imageAcquiredSemaphore));
@@ -466,9 +481,12 @@ void initFrameData()
 
 void terminateFrameData()
 {
+    vkDestroyCommandPool(device, frames[0].cmd.commandPool, nullptr);
+    vkDestroyCommandPool(device, computeCmd.commandPool, nullptr);
+    vkDestroyFence(device, computeFence, nullptr);
+
     for (FrameData &frame : frames)
     {
-        vkDestroyCommandPool(device, frame.cmd.commandPool, nullptr);
         vkDestroyFence(device, frame.renderFinishedFence, nullptr);
         vkDestroySemaphore(device, frame.imageAcquiredSemaphore, nullptr);
         vkDestroySemaphore(device, frame.renderFinishedSemaphore, nullptr);
@@ -497,18 +515,20 @@ void initDescriptors()
 
     VkDescriptorSetLayoutBinding globalSetBindings[]
     {
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT},
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT},
-        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT},
-        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT},
-        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT},
-        {7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
-        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT},
-        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
-        {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT}, // draw data
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // read indices
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // write indices
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // positions
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // normalUvs
+        {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // transforms
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // materials
+        {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // lights
+        {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // camera
+        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // brdf lut
+        {10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
+        {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
+        {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
+        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
 
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
@@ -525,17 +545,14 @@ void initDescriptors()
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &texturesDescriptorSetLayout));
     setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(skyboxSetBindings, countOf(skyboxSetBindings));
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &skyboxDescriptorSetLayout));
-    setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(nullptr, 0);
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &computeDescriptorSetLayout));
 
-    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout, skyboxDescriptorSetLayout, computeDescriptorSetLayout };
+    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout, skyboxDescriptorSetLayout };
     VkDescriptorSet sets[countOf(layouts)];
     VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, layouts, countOf(layouts));
     vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, sets));
     globalDescriptorSet = sets[0];
     texturesDescriptorSet = sets[1];
     skyboxDescriptorSet = sets[2];
-    computeDescriptorSet = sets[3];
 }
 
 void terminateDescriptors()
@@ -546,7 +563,6 @@ void terminateDescriptors()
     vkDestroyDescriptorSetLayout(device, globalDescriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, texturesDescriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, skyboxDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
 }
 
 void initPipelines()
@@ -572,7 +588,7 @@ void initPipelines()
     VkPipelineVertexInputStateCreateInfo vertexInputState = initPipelineVertexInputStateCreateInfo(nullptr, 0, nullptr, 0);
     VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = initPipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     VkPipelineViewportStateCreateInfo viewportState = initPipelineViewportStateCreateInfo();
-    VkPipelineRasterizationStateCreateInfo rasterizationState = initPipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    VkPipelineRasterizationStateCreateInfo rasterizationState = initPipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
     VkPipelineMultisampleStateCreateInfo multisampleState = initPipelineMultisampleStateCreateInfo();
     VkPipelineDepthStencilStateCreateInfo depthStencilState = initPipelineDepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
     VkPipelineColorBlendStateCreateInfo colorBlendState = initPipelineColorBlendStateCreateInfo(&blendState, 1);
@@ -603,6 +619,7 @@ void initPipelines()
     fragmentShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxFragmentShader.shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
+    rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_GREATER_OR_EQUAL);
     graphicsPipelineCreateInfo.layout = skyboxPipelineLayout;
     vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &skyboxPipeline));
@@ -631,13 +648,15 @@ void initPipelines()
     vkDestroyShaderModule(device, vertexShader, nullptr);
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
-    // Compute
-    setLayouts[1] = computeDescriptorSetLayout;
-    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
-    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.computeComputeShader.shaderSpvPath);
+    // Cutting
+    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.size = sizeof(CuttingData);
+    pipelineLayoutCreateInfo.setLayoutCount = 1;
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &cuttingPipelineLayout));
+    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.cuttingComputeShader.shaderSpvPath);
     VkPipelineShaderStageCreateInfo computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
-    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
-    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &computePipeline));
+    VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, cuttingPipelineLayout);
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &cuttingPipeline));
     vkDestroyShaderModule(device, computeShader, nullptr);
 }
 
@@ -647,8 +666,8 @@ void terminatePipelines()
     vkDestroyPipeline(device, modelPipeline, nullptr);
     vkDestroyPipelineLayout(device, skyboxPipelineLayout, nullptr);
     vkDestroyPipeline(device, skyboxPipeline, nullptr);
-    vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
-    vkDestroyPipeline(device, computePipeline, nullptr);
+    vkDestroyPipelineLayout(device, cuttingPipelineLayout, nullptr);
+    vkDestroyPipeline(device, cuttingPipeline, nullptr);
     vkDestroyPipelineLayout(device, linePipelineLayout, nullptr);
     vkDestroyPipeline(device, linePipeline, nullptr);
 }
@@ -728,26 +747,44 @@ void prepareAssets()
     }
 }
 
+static const uint32_t maxIndexCount = UINT16_MAX * 32;
+static const uint32_t maxVertexCount = UINT16_MAX * 4;
+static const uint32_t maxTransformCount = UINT8_MAX;
+static const uint32_t maxMaterialCount = UINT8_MAX;
+static const uint32_t maxIndicesSize = maxIndexCount * sizeof(uint32_t);
+static const uint32_t maxPositionsSize = maxVertexCount * sizeof(Position);
+static const uint32_t maxNormalUvsSize = maxVertexCount * sizeof(NormalUv);
+static const uint32_t maxTransformsSize = maxTransformCount * sizeof(TransformData);
+static const uint32_t maxMaterialsSize = maxMaterialCount * sizeof(MaterialData);
+
 void loadModel(const char *sceneDirPath)
 {
     ZoneScoped;
-    static const uint32_t maxIndexCount = UINT16_MAX * 32;
-    static const uint32_t maxVertexCount = UINT16_MAX * 4;
-    static const uint32_t maxTransformCount = UINT8_MAX;
-    static const uint32_t maxMaterialCount = UINT8_MAX;
-    static const uint32_t maxIndicesSize = maxIndexCount * sizeof(uint32_t);
-    static const uint32_t maxPositionsSize = maxVertexCount * sizeof(Position);
-    static const uint32_t maxNormalUvsSize = maxVertexCount * sizeof(NormalUv);
-    static const uint32_t maxTransformsSize = maxTransformCount * sizeof(TransformData);
-    static const uint32_t maxMaterialsSize = maxMaterialCount * sizeof(MaterialData);
-    static const uint32_t maxBufferSize = maxIndicesSize + maxPositionsSize + maxNormalUvsSize + maxTransformsSize + maxMaterialsSize;
-
     uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
-    uint32_t maxIndicesOffset = 0;
-    uint32_t maxPositionsOffset = aligned(maxIndicesOffset + maxIndicesSize, sboAlignment);
+    uint32_t maxReadIndicesOffset = 0;
+    uint32_t maxWriteIndicesOffset = aligned(maxReadIndicesOffset + maxIndicesSize, sboAlignment);
+    uint32_t maxPositionsOffset = aligned(maxWriteIndicesOffset + maxIndicesSize, sboAlignment);
     uint32_t maxNormalUvsOffset = aligned(maxPositionsOffset + maxPositionsSize, sboAlignment);
     uint32_t maxTransformsOffset = aligned(maxNormalUvsOffset + maxNormalUvsSize, sboAlignment);
     uint32_t maxMaterialsOffset = aligned(maxTransformsOffset + maxTransformsSize, sboAlignment);
+
+    if (!modelBuffer.buffer)
+    {
+        uint32_t maxBufferSize = maxMaterialsOffset + maxMaterialsSize;
+        modelBuffer = createGpuBuffer(maxBufferSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+        setGpuBufferName(modelBuffer, NAMEOF(modelBuffer));
+    }
+
+    if (!drawIndirectBuffer.buffer)
+    {
+        drawIndirectBuffer = createGpuBuffer(2 * aligned(sizeof(DrawIndirectData), sboAlignment),
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        setGpuBufferName(drawIndirectBuffer, NAMEOF(drawIndirectBuffer));
+    }
 
     model = loadSceneFromFile(sceneDirPath);
 
@@ -773,21 +810,6 @@ void loadModel(const char *sceneDirPath)
     ASSERT(transformsSize <= maxTransformsSize);
     ASSERT(materialsSize <= maxMaterialsSize);
 
-    if (!modelBuffer.buffer)
-    {
-        modelBuffer = createGpuBuffer(maxBufferSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            0);
-    }
-
-    if (!drawIndirectBuffer.buffer)
-    {
-        drawIndirectBuffer = createGpuBuffer(sizeof(VkDrawIndirectCommand),
-            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, SharingMode::Concurrent);
-    }
-
     memcpy((char *)stagingBuffer.mappedData + indicesOffset, model.indices.data(), indicesSize);
     memcpy((char *)stagingBuffer.mappedData + positionsOffset, model.positions.data(), positionsSize);
     memcpy((char *)stagingBuffer.mappedData + normalUvsOffset, model.normalUvs.data(), normalUvsSize);
@@ -795,31 +817,33 @@ void loadModel(const char *sceneDirPath)
     memcpy((char *)stagingBuffer.mappedData + materialsOffset, model.materials.data(), materialsSize);
     VkBufferCopy copies[]
     {
-        {indicesOffset, maxIndicesOffset, indicesSize},
+        {indicesOffset, maxReadIndicesOffset, indicesSize},
         {positionsOffset, maxPositionsOffset, positionsSize},
         {normalUvsOffset, maxNormalUvsOffset, normalUvsSize},
         {transformsOffset, maxTransformsOffset, transformsSize},
         {materialsOffset, maxMaterialsOffset, materialsSize}
     };
-    copyStagingBufferToBuffer(modelBuffer, copies, countOf(copies), QueueFamily::Graphics);
+    copyStagingBufferToBuffer(modelBuffer, copies, countOf(copies));
 
-    VkDrawIndirectCommand drawIndirectCommand;
-    drawIndirectCommand.vertexCount = (uint32_t)model.indices.size();
-    drawIndirectCommand.instanceCount = 1;
-    drawIndirectCommand.firstVertex = 0;
-    drawIndirectCommand.firstInstance = 0;
+    static_assert(offsetof(DrawIndirectData, vertexCount) == sizeof(VkDrawIndirectCommand), "");
 
-    memcpy(stagingBuffer.mappedData, &drawIndirectCommand, sizeof(VkDrawIndirectCommand));
-    copies[0] = { 0, 0, sizeof(VkDrawIndirectCommand) };
-    copyStagingBufferToBuffer(drawIndirectBuffer, copies, 1);
+    drawDataReadIndex = 0;
+    drawIndirectReadData.indexCount = (uint32_t)model.indices.size();
+    drawIndirectReadData.instanceCount = 1;
+    drawIndirectReadData.firstVertex = 0;
+    drawIndirectReadData.firstInstance = 0;
+    drawIndirectReadData.vertexCount = (uint32_t)model.positions.size();
+    memcpy(drawIndirectBuffer.mappedData, &drawIndirectReadData, sizeof(DrawIndirectData));
 
     VkDescriptorBufferInfo bufferInfos[]
     {
-        {modelBuffer.buffer, maxIndicesOffset, indicesSize},
-        {modelBuffer.buffer, maxPositionsOffset, positionsSize},
-        {modelBuffer.buffer, maxNormalUvsOffset, normalUvsSize},
-        {modelBuffer.buffer, maxTransformsOffset, transformsSize},
-        {modelBuffer.buffer, maxMaterialsOffset, materialsSize}
+        {drawIndirectBuffer.buffer, 0, 2 * sizeof(DrawIndirectData)},
+        {modelBuffer.buffer, maxReadIndicesOffset, maxIndicesSize},
+        {modelBuffer.buffer, maxReadIndicesOffset, maxIndicesSize},
+        {modelBuffer.buffer, maxPositionsOffset, maxPositionsSize},
+        {modelBuffer.buffer, maxNormalUvsOffset, maxNormalUvsSize},
+        {modelBuffer.buffer, maxTransformsOffset, maxTransformsSize},
+        {modelBuffer.buffer, maxMaterialsOffset, maxMaterialsSize}
     };
 
     for (uint8_t i = 0; i < modelTextureCount; i++)
@@ -845,10 +869,12 @@ void loadModel(const char *sceneDirPath)
     VkWriteDescriptorSet writes[]
     {
         initWriteDescriptorSetBuffer(globalDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 0),
-        initWriteDescriptorSetBuffer(globalDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 1),
-        initWriteDescriptorSetBuffer(globalDescriptorSet, 2, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 2),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 1, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, bufferInfos + 1),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 2, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, bufferInfos + 2),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 3, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 3),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 4, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 4),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 5, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 5),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 6),
         initWriteDescriptorSetImage(texturesDescriptorSet, 0, modelTextureCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos)
     };
 
@@ -905,9 +931,9 @@ void loadEnvMaps()
 
     VkWriteDescriptorSet writes[]
     {
-        initWriteDescriptorSetImage(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
-        initWriteDescriptorSetImage(globalDescriptorSet, 8, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
-        initWriteDescriptorSetImage(globalDescriptorSet, 9, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 9, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
+        initWriteDescriptorSetImage(globalDescriptorSet, 10, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 11, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
         initWriteDescriptorSetImage(skyboxDescriptorSet, 2, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
     };
 
@@ -948,6 +974,7 @@ void loadLights()
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    setGpuBufferName(globalUniformBuffer, NAMEOF(globalUniformBuffer));
 
     VkDescriptorBufferInfo bufferInfos[]
     {
@@ -957,8 +984,8 @@ void loadLights()
 
     VkWriteDescriptorSet writes[]
     {
-        initWriteDescriptorSetBuffer(globalDescriptorSet, 5, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bufferInfos + 0),
-        initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bufferInfos + 0),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 8, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
         initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
     };
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
@@ -974,6 +1001,7 @@ void initScene()
     loadLights();
 
     lineData.width = defaultLineWidth * uiScale;
+    cuttingData.width = 0.1f; // 10 cm
 
     camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
     //camera.lookAt(glm::vec3(scene.meshMatrices[0][3]));
@@ -1038,18 +1066,19 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
 
         if (button == GLFW_MOUSE_BUTTON_2)
         {
+            double x, y;
+
             switch (cutState)
             {
             case CutState::None:
-                double x, y;
                 glfwGetCursorPos(window, &x, &y);
                 lineData.p1 = glm::vec2(x, y);
-                cutState = CutState::CutStarted;
+                cutState = CutState::CutLineStarted;
                 break;
-            case CutState::CutStarted:
-                cutState = CutState::CutFinished;
-                break;
-            case CutState::CutFinished:
+            case CutState::CutLineStarted:
+                glfwGetCursorPos(window, &x, &y);
+                lineData.p2 = glm::vec2(x, y);
+                cutState = CutState::CutLineFinished;
                 break;
             default:
                 break;
@@ -1150,6 +1179,15 @@ void updateInput()
     camera.onMove(dx, dy, dz);
 }
 
+static glm::vec3 screenToWorld(glm::vec2 p, glm::vec2 res, glm::mat4 invViewProjMat)
+{
+    float clipX = p.x / res.x * 2.f - 1.f;
+    float clipY = p.y / res.y * -2.f + 1.f;
+    glm::vec4 pos = invViewProjMat * glm::vec4(clipX, clipY, 0.f, 1.f);
+
+    return glm::vec3(pos) / pos.w;
+}
+
 void updateLogic(float delta)
 {
     ZoneScoped;
@@ -1163,21 +1201,33 @@ void updateLogic(float delta)
     FrameData &frame = frames[frameIndex];
     frame.cameraData.sceneMat = sceneMat;
     frame.cameraData.viewMat = camera.getViewMatrix();
-    frame.cameraData.invViewMat = camera.getWorldMatrix();
+    frame.cameraData.invViewMat = camera.getCameraMatrix();
     frame.cameraData.projMat = projMat;
     frame.cameraData.sceneConfig = sceneConfig;
 
     switch (cutState)
     {
-    case CutState::CutStarted:
+    case CutState::CutLineStarted:
+    {
         double x, y;
         glfwGetCursorPos(window, &x, &y);
         lineData.p2 = glm::vec2(x, y);
         lineData.windowRes = glm::vec2(windowExtent.width, windowExtent.height);
         break;
-    case CutState::CutFinished:
-        cutState = CutState::None;
+    }
+    case CutState::CutLineFinished:
+    {
+        glm::mat4 invViewProjMat = frame.cameraData.invViewMat * glm::inverse(projMat);
+        glm::vec3 p1 = screenToWorld(lineData.p1, lineData.windowRes, invViewProjMat);
+        glm::vec3 p2 = screenToWorld(lineData.p2, lineData.windowRes, invViewProjMat);
+        glm::vec3 p3 = camera.getPosition();
+
+        glm::vec3 planeNormal = glm::normalize(glm::cross(p3 - p1, p3 - p2));
+        float planeD = -glm::dot(planeNormal, p3);
+        cuttingData.normalAndD = glm::vec4(planeNormal, planeD);
+        cuttingData.drawDataReadIndex = drawDataReadIndex;
         break;
+    }
     default:
         break;
     }
@@ -1195,8 +1245,13 @@ void drawModel(Cmd cmd)
     ScopedGpuZone(cmd, "Model");
     FrameData &frame = frames[frameIndex];
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
+    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
     uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
     uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
+    uint32_t maxIndicesOffset = aligned(maxIndicesSize, sboAlignment);
+    uint32_t readIndicesOffset = drawDataReadIndex * maxIndicesOffset;
+    uint32_t writeIndicesOffset = !drawDataReadIndex * maxIndicesOffset;
+    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
 
     memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
     memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.cameraData, sizeof(CameraData));
@@ -1229,9 +1284,9 @@ void drawModel(Cmd cmd)
     vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
 
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
-    uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
+    uint32_t dynamicOffsets[] { readIndicesOffset, writeIndicesOffset, cameraDataDynamicOffset };
     vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
-    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, 0, 1, 0);
+    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
 }
 
 void drawSkybox(Cmd cmd)
@@ -1249,6 +1304,14 @@ void drawSkybox(Cmd cmd)
     vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
 
+static inline void tableCellLabel(const char *label)
+{
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::TableNextColumn();
+}
+
 void drawUI(Cmd cmd)
 {
     ZoneScoped;
@@ -1263,11 +1326,8 @@ void drawUI(Cmd cmd)
     if (ImGui::BeginTable("Table", 2, ImGuiTableFlags_NoHostExtendX))
     {
         const char *basename;
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Model");
-        ImGui::TableNextColumn();
         cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
+        tableCellLabel("Model");
         if (ImGui::BeginCombo("##Model", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < countOf(sceneInfos); i++)
@@ -1283,10 +1343,7 @@ void drawUI(Cmd cmd)
             ImGui::EndCombo();
         }
 
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Material");
-        ImGui::TableNextColumn();
+        tableCellLabel("Material");
         if (ImGui::BeginCombo("##Material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < countOf(materialNames); i++)
@@ -1300,11 +1357,8 @@ void drawUI(Cmd cmd)
             ImGui::EndCombo();
         }
 
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Skybox");
-        ImGui::TableNextColumn();
         cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
+        tableCellLabel("Skybox");
         if (ImGui::BeginCombo("##Skybox", basename, ImGuiComboFlags_WidthFitPreview))
         {
             for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
@@ -1319,35 +1373,28 @@ void drawUI(Cmd cmd)
             ImGui::EndCombo();
         }
 
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Rotate model");
-        ImGui::TableNextColumn();
+        tableCellLabel("Rotate model");
         ImGui::Checkbox("##Rotate model", &rotateScene);
-
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Show wireframe");
-        ImGui::TableNextColumn();
+        tableCellLabel("Show wireframe");
         ImGui::CheckboxFlags("##Show wireframe", &sceneConfig, SCENE_SHOW_WIREFRAME);
-
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Use normal map");
-        ImGui::TableNextColumn();
+        tableCellLabel("Use normal map");
         ImGui::CheckboxFlags("##Use normal map", &sceneConfig, SCENE_USE_NORMAL_MAP);
-
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Use lights");
-        ImGui::TableNextColumn();
+        tableCellLabel("Use lights");
         ImGui::CheckboxFlags("##Use lights", &sceneConfig, SCENE_USE_LIGHTS);
-
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Use IBL");
-        ImGui::TableNextColumn();
+        tableCellLabel("Use IBL");
         ImGui::CheckboxFlags("##Use IBL", &sceneConfig, SCENE_USE_IBL);
+
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.vertexCount, maxVertexCount);
+        tableCellLabel("Vertex buffer");
+        ImGui::ProgressBar((float)drawIndirectReadData.vertexCount / maxVertexCount, ImVec2(-FLT_MIN, 0), buffer);
+
+        snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.indexCount, maxIndexCount);
+        tableCellLabel("Index buffer");
+        ImGui::ProgressBar((float)drawIndirectReadData.indexCount / maxIndexCount, ImVec2(-FLT_MIN, 0), buffer);
+
+        tableCellLabel("Cut width");
+        ImGui::SliderFloat("", &cuttingData.width, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 #ifdef DEBUG
         static const uint32_t debugChannels[]
@@ -1436,14 +1483,51 @@ void drawUI(Cmd cmd)
 
 void drawLine(Cmd cmd)
 {
-    if (cutState == CutState::None)
-        return;
-
     ZoneScoped;
     ScopedGpuZone(cmd, "Line");
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
     vkCmdPushConstants(cmd.commandBuffer, linePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LineData), &lineData);
     vkCmdDraw(cmd.commandBuffer, 6, 1, 0, 0);
+}
+
+void dispatchCutting()
+{
+    ZoneScoped;
+    vkVerify(vkResetFences(device, 1, &computeFence));
+    vkVerify(vkResetCommandBuffer(computeCmd.commandBuffer, 0));
+    uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
+    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
+    uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
+    uint32_t maxIndicesOffset = aligned(maxIndicesSize, sboAlignment);
+    uint32_t readIndicesOffset = drawDataReadIndex * maxIndicesOffset;
+    uint32_t writeIndicesOffset = !drawDataReadIndex * maxIndicesOffset;
+    uint32_t drawIndirectDataWriteOffset = !drawDataReadIndex * sizeof(DrawIndirectData);
+
+    DrawIndirectData drawIndirectWriteData = drawIndirectReadData;
+    drawIndirectWriteData.indexCount = 0;
+    memcpy((char *)drawIndirectBuffer.mappedData + drawIndirectDataWriteOffset, &drawIndirectWriteData, sizeof(DrawIndirectData));
+
+    beginOneTimeCmd(computeCmd);
+    {
+        ScopedGpuZoneAutoCollect(computeCmd, "Cutting");
+        ASSERT(drawIndirectReadData.indexCount % 3 == 0);
+        uint32_t groupSizeX = 256;
+        uint32_t groupCountX = (drawIndirectReadData.indexCount / 3 + groupSizeX - 1) / groupSizeX;
+        VkDescriptorSet descriptorSets[] { globalDescriptorSet };
+        uint32_t dynamicOffsets[] { readIndicesOffset, writeIndicesOffset, cameraDataDynamicOffset };
+        vkCmdBindDescriptorSets(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
+        vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipeline);
+        vkCmdPushConstants(computeCmd.commandBuffer, cuttingPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CuttingData), &cuttingData);
+        vkCmdDispatch(computeCmd.commandBuffer, groupCountX, 1, 1);
+    }
+    endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, computeFence);
+}
+
+void readCuttingData()
+{
+    drawDataReadIndex = !drawDataReadIndex; // rotate draw and index buffers
+    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
+    memcpy(&drawIndirectReadData, (char *)drawIndirectBuffer.mappedData + drawIndirectDataReadOffset, sizeof(DrawIndirectData));
 }
 
 void draw()
@@ -1453,6 +1537,20 @@ void draw()
     {
         recreateRenderTargets();
         resizeNeeded = false;
+    }
+
+    if (cutState == CutState::CuttingInProgress)
+    {
+        if (vkGetFenceStatus(device, computeFence) == VK_SUCCESS)
+        {
+            readCuttingData();
+            cutState = CutState::None;
+        }
+    }
+    else if (cutState == CutState::CutLineFinished)
+    {
+        dispatchCutting();
+        cutState = CutState::CuttingInProgress;
     }
 
     FrameData &frame = frames[frameIndex];
@@ -1469,14 +1567,10 @@ void draw()
         resizeNeeded = true;
         return;
     }
-    else
-    {
-        vkVerify(result);
-    }
 
+    vkAssert(result);
     vkVerify(vkResetFences(device, 1, &frame.renderFinishedFence));
-
-    vkVerify(vkResetCommandPool(device, frame.cmd.commandPool, 0));
+    vkVerify(vkResetCommandBuffer(frame.cmd.commandBuffer, 0));
     Cmd cmd = frame.cmd;
     beginOneTimeCmd(cmd);
     {
@@ -1501,7 +1595,7 @@ void draw()
         drawModel(cmd);
         drawSkybox(cmd);
         drawUI(cmd);
-        if (cutState != CutState::None)
+        if (cutState == CutState::CutLineStarted)
             drawLine(cmd);
         vkCmdEndRenderingKHR(cmd.commandBuffer);
 

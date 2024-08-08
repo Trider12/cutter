@@ -1018,10 +1018,12 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     };
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 
-    VkSemaphore semaphore;
+    VkSemaphore semaphore1, semaphore2;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
-    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore));
-    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo = initSemaphoreSubmitInfo(semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore1));
+    vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphore2));
+    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo1 = initSemaphoreSubmitInfo(semaphore1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+    VkSemaphoreSubmitInfoKHR ownershipReleaseFinishedInfo2 = initSemaphoreSubmitInfo(semaphore2, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
     ImageBarrier imageBarriers[3] {};
 
     uint32_t computeSkyboxWorkGroupCount = findBestWorkGroupCount2d(skyboxFaceSize);
@@ -1057,7 +1059,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].dstQueueFamily = QueueFamily::Graphics;
         pipelineBarrier(computeCmd1, nullptr, 0, imageBarriers, 1);
     }
-    endAndSubmitOneTimeCmd(computeCmd1, computeQueue, nullptr, &ownershipReleaseFinishedInfo, WaitForFence::No);
+    endAndSubmitOneTimeCmd(computeCmd1, computeQueue, nullptr, &ownershipReleaseFinishedInfo1, WaitForFence::No);
 
     Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
     beginOneTimeCmd(graphicsCmd);
@@ -1081,7 +1083,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].dstQueueFamily = QueueFamily::Compute;
         pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
     }
-    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, &ownershipReleaseFinishedInfo, &ownershipReleaseFinishedInfo, WaitForFence::No);
+    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, &ownershipReleaseFinishedInfo1, &ownershipReleaseFinishedInfo2, WaitForFence::No);
 
     Cmd computeCmd2 = allocateCmd(computeCommandPool);
     beginOneTimeCmd(computeCmd2);
@@ -1104,7 +1106,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         vkCmdPushConstants(computeCmd2.commandBuffer, commonPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(prefilteredMapLevelCount), &prefilteredMapLevelCount);
         vkCmdDispatch(computeCmd2.commandBuffer, computePrefilteredMapWorkGroupCount * 6, computePrefilteredMapWorkGroupCount, 1);
     }
-    endAndSubmitOneTimeCmd(computeCmd2, computeQueue, &ownershipReleaseFinishedInfo, nullptr, WaitForFence::Yes);
+    endAndSubmitOneTimeCmd(computeCmd2, computeQueue, &ownershipReleaseFinishedInfo2, nullptr, WaitForFence::Yes);
 
     image.purpose = ImagePurpose::HDRI;
     copyImage(skyboxGpuImage, image, QueueFamily::Compute);
@@ -1128,5 +1130,6 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     freeCmd(graphicsCmd);
     freeCmd(computeCmd1);
     freeCmd(computeCmd2);
-    vkDestroySemaphore(device, semaphore, nullptr);
+    vkDestroySemaphore(device, semaphore1, nullptr);
+    vkDestroySemaphore(device, semaphore2, nullptr);
 }

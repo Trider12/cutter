@@ -25,6 +25,8 @@ VkCommandBufferSubmitInfoKHR initCommandBufferSubmitInfo(VkCommandBuffer command
 
 VkSemaphoreSubmitInfoKHR initSemaphoreSubmitInfo(VkSemaphore semaphore, VkPipelineStageFlags2KHR stageMask);
 
+VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBufferSubmitInfo, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfos, uint32_t waitSemaphoreSubmitInfoCount, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfos, uint32_t signalSemaphoreSubmitInfoCount);
+
 VkSubmitInfo2KHR initSubmitInfo(const VkCommandBufferSubmitInfoKHR *commandBufferSubmitInfo, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo);
 
 VkPresentInfoKHR initPresentInfo(const VkSwapchainKHR *swapchain, const VkSemaphore *waitSemaphore, const uint32_t *imageIndex);

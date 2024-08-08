@@ -1,4 +1,3 @@
-#include "fragmentUtils.h"
 #include "modelDescriptorSet.h"
 #include "pbr.h"
 
@@ -8,7 +7,6 @@ struct VsOut
     vec3 norm;
     vec3 bary;
     vec2 uv;
-    uint transformIndex;
 };
 
 layout(location = 0) in FsInBlock
@@ -29,14 +27,30 @@ layout(push_constant) uniform ConstantBlock
 #endif // DEBUG
 };
 
-vec3 perturbNormal(vec3 N, vec3 V, vec2 texcoord, uint normalMapIndex)
+vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
 {
-    vec3 map = texture(sampler2D(textures[normalMapIndex], linearRepeatSampler), texcoord).rgb;
-    map.xy = map.xy * 2.f - 1.f;
-    map.z = sqrt(1.f - dot(map.xy, map.xy));
-    map.x = -map.x;
-    mat3 TBN = cotangentFrame(N, -V, texcoord);
-    return normalize(TBN * map);
+    vec3 normal = texture(sampler2D(textures[normalMapIndex], linearRepeatSampler), uv).rgb;
+    normal.xy = normal.xy * 2.f - 1.f;
+    normal.z = sqrt(1.f - dot(normal.xy, normal.xy));
+    normal.y = -normal.y;
+
+    vec3 pdx = dFdx(p);
+    vec3 pdy = dFdy(p);
+    vec2 uvdx = dFdx(uv);
+    vec2 uvdy = dFdy(uv);
+
+    float det = determinant(mat2(uvdx, uvdy));
+    vec3 T = normalize(uvdy.y * pdx - uvdx.y * pdy);
+    vec3 B = -normalize(cross(N, T));
+
+    return normalize(mat3(T, sign(det) * B, N) * normal);
+}
+
+float edgeFactor(vec3 bary)
+{
+    const float thickness = 1.f;
+    vec3 a3 = smoothstep(vec3(0.f), fwidth(bary) * thickness, bary);
+    return 1.f - min(min(a3.x, a3.y), a3.z);
 }
 
 void main()
@@ -47,10 +61,11 @@ void main()
     vec3 N = normalize(fsIn.norm);
     vec3 V = normalize(viewVec);
 
+    if(!gl_FrontFacing)
+        N = -N;
+
     if(bool(cameraData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
-    {
-        N = perturbNormal(N, viewVec, fsIn.uv, md.normalTexIndex);
-    }
+        N = getNormal(N, fsIn.pos, fsIn.uv, md.normalTexIndex);
 
     vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(textures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
     vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(textures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f, 0.f, 0.f);
@@ -70,7 +85,7 @@ void main()
 
     if(bool(cameraData.sceneConfig & SCENE_USE_LIGHTS))
     {
-        for(uint i = 0; i < uint(lightData.dirLightCount); i++)
+        for(uint i = 0; i < lightData.dirLightCount; i++)
         {
             vec3 L = -normalize(vec3(lightData.lights[i].x, lightData.lights[i].y, lightData.lights[i].z));
             vec3 H = normalize(V + L);
@@ -87,9 +102,9 @@ void main()
             LoSpec += fSpec * Li * NdotL;
         }
 
-//        for(uint i = 0; i < uint(lightData.pointLightCount); i++)
+//        for(uint i = 0; i < lightData.pointLightCount; i++)
 //        {
-//            uint offset = uint(lightData.dirLightCount);
+//            uint offset = lightData.dirLightCount;
 //            vec3 lightPos = vec3(lightData.lights[offset + i].x, lightData.lights[offset + i].y, lightData.lights[offset + i].z);
 //            vec3 L = normalize(lightPos - fsIn.pos);
 //        }

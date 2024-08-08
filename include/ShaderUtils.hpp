@@ -2,11 +2,11 @@
 
 #include <volk/volk.h>
 
-enum ShaderType : uint8_t
+enum class ShaderType : uint8_t
 {
-    Vertex,
-    Fragment,
-    Compute
+    Vertex = 0,
+    Fragment = 1,
+    Compute = 2
 };
 
 void initShaderCompiler();

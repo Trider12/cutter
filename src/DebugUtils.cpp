@@ -45,6 +45,12 @@ void endRenderdocCapture()
         renderdocApi->EndFrameCapture(nullptr, nullptr);
 }
 
+void setGpuBufferName(GpuBuffer &gpuBuffer, const char *name)
+{
+    VkDebugUtilsObjectNameInfoEXT objectNameInfo = initDebugUtilsObjectNameInfoEXT(VK_OBJECT_TYPE_BUFFER, gpuBuffer.buffer, name);
+    vkSetDebugUtilsObjectNameEXT(device, &objectNameInfo);
+}
+
 void setGpuImageName(GpuImage &gpuImage, const char *name)
 {
     VkDebugUtilsObjectNameInfoEXT objectNameInfo = initDebugUtilsObjectNameInfoEXT(VK_OBJECT_TYPE_IMAGE, gpuImage.image, name);

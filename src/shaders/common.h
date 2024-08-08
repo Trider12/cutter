@@ -4,23 +4,16 @@
 #ifdef __cplusplus
 #include "Glm.hpp"
 #define float16_t uint16_t
-#define uint uint32_t
 #define vec2 glm::vec2
 #define vec3 glm::vec3
+#define vec4 glm::vec4
 #define mat4 glm::mat4
 #else
+#extension GL_EXT_shader_explicit_arithmetic_types : require
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_nonuniform_qualifier : require
-
-struct VkDrawIndirectCommand
-{
-    uint vertexCount;
-    uint instanceCount;
-    uint firstVertex;
-    uint firstInstance;
-};
 #endif // __cplusplus
 
 #define MAX_LIGHTS 16
@@ -60,16 +53,15 @@ struct NormalUv
 
 struct MaterialData
 {
-    uint colorTexIndex;
-    uint normalTexIndex;
-    uint aoRoughMetalTexIndex;
-    uint mask;
+    uint32_t colorTexIndex;
+    uint32_t normalTexIndex;
+    uint32_t aoRoughMetalTexIndex;
+    uint32_t mask;
 };
 
 struct TransformData
 {
     mat4 toWorldMat;
-    mat4 toLocalMat;
 };
 
 struct LightData
@@ -92,8 +84,8 @@ struct CameraData
     mat4 viewMat;
     mat4 invViewMat;
     mat4 projMat;
-    uint sceneConfig;
-    uint pad[3];
+    uint32_t sceneConfig;
+    uint32_t pad[3];
 };
 
 struct LineData
@@ -101,24 +93,44 @@ struct LineData
     vec2 p1;
     vec2 p2;
     vec2 windowRes;
-    float width;
+    float width; // in pixels
     float pad;
+};
+
+struct CuttingData
+{
+    vec4 normalAndD;
+    float width; // in meters
+    uint32_t drawDataReadIndex;
+    float pad[2];
+};
+
+struct DrawIndirectData
+{
+    // start of VkDrawIndirectCommand
+    uint32_t indexCount; // this is used as the vertexCount for vkCmdDrawIndirect. TODO: fix this
+    uint32_t instanceCount;
+    uint32_t firstVertex;
+    uint32_t firstInstance;
+    // end of VkDrawIndirectCommand
+    uint32_t vertexCount;
 };
 
 #ifdef __cplusplus
 #undef float16_t
-#undef uint
 #undef vec2
 #undef vec3
+#undef vec4
 #undef mat4
 static_assert(sizeof(Position) == 8, "");
 static_assert(sizeof(NormalUv) == 8, "");
 static_assert(sizeof(MaterialData) == 16, "");
-static_assert(sizeof(TransformData) == 128, "");
+static_assert(sizeof(TransformData) == 64, "");
 static_assert(sizeof(LightData) == 24, "");
 static_assert(sizeof(LightingData) == sizeof(LightData) * MAX_LIGHTS + 4, "");
 static_assert(sizeof(CameraData) == sizeof(float[4]) * 17, "");
 static_assert(sizeof(LineData) == sizeof(float[2]) * 4, "");
+static_assert(sizeof(CuttingData) == sizeof(float[4]) * 2, "");
 #endif // __cplusplus
 
 #endif // !COMMON_H

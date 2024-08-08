@@ -18,7 +18,7 @@ void FlyCamera::update(float delta)
 
     if (glm::length2(inputAxes) > 0.f)
     {
-        glm::mat4 worldMat = getWorldMatrix();
+        glm::mat4 worldMat = getCameraMatrix();
         glm::vec3 moveDir = glm::vec3(worldMat * glm::vec4(glm::normalize(inputAxes), 0.f));
         position += moveDir * speed * delta;
     }
@@ -43,7 +43,7 @@ glm::vec3 &FlyCamera::getPosition()
     return position;
 }
 
-glm::mat4 FlyCamera::getWorldMatrix() const
+glm::mat4 FlyCamera::getCameraMatrix() const
 {
     glm::mat4 worldMat = glm::eulerAngleYX(rotation.y, rotation.x);
     worldMat[3] = glm::vec4(position, 1.f);
