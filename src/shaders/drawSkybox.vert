@@ -1,11 +1,6 @@
-#include "common.h"
+#include "modelDescriptorSet.h"
 
 layout(location = 0) out vec3 outPos;
-
-layout(std430, set = 1, binding = 0) uniform CameraBlock
-{
-    CameraData cameraData;
-};
 
 void main()
 {

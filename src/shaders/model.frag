@@ -20,8 +20,8 @@ layout(set = 1, binding = 0) uniform texture2D textures[MAX_MODEL_TEXTURES];
 
 layout(push_constant) uniform ConstantBlock
 {
-    uint materialIndex;
     uint skyboxIndex;
+    uint materialIndex;
 #ifdef DEBUG
     uint debugFlags;
 #endif // DEBUG

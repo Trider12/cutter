@@ -217,8 +217,6 @@ VkDescriptorSetLayout globalDescriptorSetLayout;
 VkDescriptorSet globalDescriptorSet;
 VkDescriptorSetLayout texturesDescriptorSetLayout;
 VkDescriptorSet texturesDescriptorSet;
-VkDescriptorSetLayout skyboxDescriptorSetLayout;
-VkDescriptorSet skyboxDescriptorSet;
 
 VkPipeline modelPipeline;
 VkPipelineLayout modelPipelineLayout;
@@ -525,34 +523,25 @@ void initDescriptors()
         {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // lights
         {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // camera
         {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // brdf lut
-        {10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
-        {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
-        {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
-        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
+        {10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}, // skybox
+        {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
+        {12, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
+        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
+        {14, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
     };
-
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
-    VkDescriptorSetLayoutBinding skyboxSetBindings[]
-    {
-        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT},
-        {1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler},
-        {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}
-    };
 
     VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(globalSetBindings, countOf(globalSetBindings));
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &globalDescriptorSetLayout));
     setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(&texturesSetBinding, 1);
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &texturesDescriptorSetLayout));
-    setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(skyboxSetBindings, countOf(skyboxSetBindings));
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &skyboxDescriptorSetLayout));
 
-    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout, skyboxDescriptorSetLayout };
+    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
     VkDescriptorSet sets[countOf(layouts)];
     VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, layouts, countOf(layouts));
     vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, sets));
     globalDescriptorSet = sets[0];
     texturesDescriptorSet = sets[1];
-    skyboxDescriptorSet = sets[2];
 }
 
 void terminateDescriptors()
@@ -562,7 +551,6 @@ void terminateDescriptors()
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalDescriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, texturesDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, skyboxDescriptorSetLayout, nullptr);
 }
 
 void initPipelines()
@@ -611,9 +599,7 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Skybox
-    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.size = sizeof(uint32_t);
-    setLayouts[1] = skyboxDescriptorSetLayout;
+    pipelineLayoutCreateInfo.setLayoutCount = 1;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &skyboxPipelineLayout));
     vertexShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxVertexShader.shaderSpvPath);
     fragmentShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxFragmentShader.shaderSpvPath);
@@ -932,9 +918,9 @@ void loadEnvMaps()
     VkWriteDescriptorSet writes[]
     {
         initWriteDescriptorSetImage(globalDescriptorSet, 9, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
-        initWriteDescriptorSetImage(globalDescriptorSet, 10, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
-        initWriteDescriptorSetImage(globalDescriptorSet, 11, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
-        initWriteDescriptorSetImage(skyboxDescriptorSet, 2, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 10, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 11, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 12, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
     };
 
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
@@ -985,8 +971,7 @@ void loadLights()
     VkWriteDescriptorSet writes[]
     {
         initWriteDescriptorSetBuffer(globalDescriptorSet, 7, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bufferInfos + 0),
-        initWriteDescriptorSetBuffer(globalDescriptorSet, 8, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
-        initWriteDescriptorSetBuffer(skyboxDescriptorSet, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1),
+        initWriteDescriptorSetBuffer(globalDescriptorSet, 8, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, bufferInfos + 1)
     };
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
@@ -1258,8 +1243,8 @@ void drawModel(Cmd cmd)
 
     uint32_t pushData[]
     {
-        selectedMaterial,
         selectedSkybox,
+        selectedMaterial,
 #ifdef DEBUG
         debugFlags
 #endif // DEBUG
@@ -1293,14 +1278,7 @@ void drawSkybox(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, "Skybox");
-    uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
-    uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
-
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
-    vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &selectedSkybox);
-    VkDescriptorSet descriptorSets[] { skyboxDescriptorSet };
-    uint32_t dynamicOffsets[] { cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipelineLayout, 1, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
     vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
 
