@@ -130,6 +130,8 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
         stack.push(cgltfScene.nodes[i]);
     }
 
+    scene.aabb.min = glm::vec3(FLT_MAX);
+    scene.aabb.max = glm::vec3(-FLT_MAX);
     float values[4];
 
     while (!stack.empty())
@@ -194,6 +196,10 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                         position.y = meshopt_quantizeHalf(values[1]);
                         position.z = meshopt_quantizeHalf(values[2]);
                         position.transformIndex = transformIndex;
+
+                        glm::vec3 worldPos = glm::vec3(td.toWorldMat * glm::vec4(glm::make_vec3(values), 1.f));
+                        scene.aabb.min = glm::min(scene.aabb.min, worldPos);
+                        scene.aabb.max = glm::max(scene.aabb.max, worldPos);
                     }
                     break;
                 case cgltf_attribute_type_normal:
@@ -249,6 +255,10 @@ Scene loadSceneFromFile(const char *sceneDirPath)
     ASSERT(stream);
     delete[] sceneFilename;
 
+    Scene scene;
+    fread(glm::value_ptr(scene.aabb.min), sizeof(float), 3, stream);
+    fread(glm::value_ptr(scene.aabb.max), sizeof(float), 3, stream);
+
     uint32_t indexCount;
     uint32_t vertexCount;
     uint32_t transformCount;
@@ -260,7 +270,6 @@ Scene loadSceneFromFile(const char *sceneDirPath)
     fread(&materialCount, sizeof(uint32_t), 1, stream);
     fread(&imageCount, sizeof(uint32_t), 1, stream);
 
-    Scene scene;
     scene.indices.resize(indexCount);
     scene.positions.resize(vertexCount);
     scene.normalUvs.resize(vertexCount);
@@ -294,6 +303,9 @@ void writeSceneToFile(const Scene &scene, const char *sceneDirPath)
     FILE *stream = fopen(sceneFilename, "wb");
     ASSERT(stream);
     delete[] sceneFilename;
+
+    fwrite(glm::value_ptr(scene.aabb.min), sizeof(float), 3, stream);
+    fwrite(glm::value_ptr(scene.aabb.max), sizeof(float), 3, stream);
 
     ASSERT(scene.positions.size() == scene.normalUvs.size());
     uint32_t indexCount = (uint32_t)scene.indices.size();

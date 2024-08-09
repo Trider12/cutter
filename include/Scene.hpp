@@ -15,8 +15,14 @@ struct MaterialTextureSet
     const char *aoRoughMetalTexPath;
 };
 
+struct AABB
+{
+    glm::vec3 min, max;
+};
+
 struct Scene
 {
+    AABB aabb;
     std::vector<uint32_t> indices;
     std::vector<Position> positions;
     std::vector<NormalUv> normalUvs;

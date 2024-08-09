@@ -27,15 +27,8 @@ void FlyCamera::update(float delta)
 void FlyCamera::lookAt(glm::vec3 target)
 {
     glm::vec3 lookDir = glm::normalize(target - position);
-    float x = lookDir.x;
-    float y = lookDir.y;
-    float z = lookDir.z;
-    float yz = sqrtf(y * y + z * z);
-    float zx = sqrtf(z * z + x * x);
-    rotation.x = atan2(z / yz, y / yz);
-    rotation.y = atan2(x / zx, z / zx);
-
-    ASSERT(rotation.x >= -glm::radians(89.f) && rotation.x <= glm::radians(89.f));
+    rotation.x = asin(lookDir.y);
+    rotation.y = atan2f(-lookDir.x, -lookDir.z);
 }
 
 glm::vec3 &FlyCamera::getPosition()

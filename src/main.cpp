@@ -107,7 +107,7 @@ const struct SceneImportInfo
 {
     {glbsPath"Cube.glb",              scenesPath"Cube",              1.f},
     {glbsPath"ShaderBall.glb",        scenesPath"ShaderBall",        1.f},
-    {glbsPath"Lantern.glb",           scenesPath"Lantern",           0.2f},
+    {glbsPath"Lantern.glb",           scenesPath"Lantern",           0.1f},
     {glbsPath"WaterBottle.glb",       scenesPath"WaterBottle",       8.f},
     {glbsPath"SciFiHelmet.glb",       scenesPath"SciFiHelmet",       1.f},
     {glbsPath"NormalTangentTest.glb", scenesPath"NormalTangentTest", 1.f}
@@ -987,9 +987,8 @@ void initScene()
 
     lineData.width = defaultLineWidth * uiScale;
     cuttingData.width = 0.1f; // 10 cm
-
-    camera.getPosition() = glm::vec3(0.f, 0.f, 5.f);
-    //camera.lookAt(glm::vec3(scene.meshMatrices[0][3]));
+    camera.getPosition() = glm::vec3(0.f, 1.f, 5.f);
+    camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
 }
 
 void terminateScene()
@@ -1606,6 +1605,7 @@ void draw()
     {
         vkDeviceWaitIdle(device);
         loadModel(sceneInfos[selectedScene].sceneDirPath);
+        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
         sceneChangeRequired = false;
     }
 
