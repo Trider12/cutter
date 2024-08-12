@@ -116,6 +116,8 @@ const struct SceneImportInfo
 };
 uint8_t selectedScene = 1;
 bool sceneChangeRequired = false;
+bool shaderReloadRequired = false;
+bool lastShaderReloadSuccessful = true;
 
 const struct MaterialImportInfo
 {
@@ -1138,18 +1140,19 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
     }
 }
 
-void compileShaders()
+bool compileShaders()
 {
     ZoneScoped;
     ASSERT(pathExists(assetsPath) && "Assets must reside in the working dir!");
 
-    initShaderCompiler();
     for (uint8_t i = 0; i < sizeof(shaderTable) / sizeof(ShaderCompileInfo); i++)
     {
         const ShaderCompileInfo &info = ((ShaderCompileInfo *)&shaderTable)[i];
-        compileShaderIntoSpv(info.shaderSourcePath, info.shaderSpvPath, info.shaderType);
+        if (!compileShaderIntoSpv(info.shaderSourcePath, info.shaderSpvPath, info.shaderType))
+            return false;
     }
-    terminateShaderCompiler();
+
+    return true;
 }
 
 void init()
@@ -1166,7 +1169,8 @@ void init()
     glfwSetMouseButtonCallback(window, glfwMouseButtonCallback);
 
     initVulkan();
-    compileShaders();
+    initShaderCompiler();
+    VERIFY(compileShaders());
     initGraphics();
     initRenderTargets();
     initDescriptors();
@@ -1198,6 +1202,7 @@ void exit()
     terminateDescriptors();
     terminateRenderTargets();
     terminateGraphics();
+    terminateShaderCompiler();
     terminateVulkan();
 
     glfwDestroyWindow(window);
@@ -1284,6 +1289,28 @@ void updateLogic(float delta)
     }
     default:
         break;
+    }
+
+    if (sceneChangeRequired)
+    {
+        vkDeviceWaitIdle(device);
+        loadModel(sceneInfos[selectedScene].sceneDirPath);
+        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
+        sceneChangeRequired = false;
+    }
+
+    if (shaderReloadRequired)
+    {
+        lastShaderReloadSuccessful = compileShaders();
+
+        if (lastShaderReloadSuccessful)
+        {
+            vkDeviceWaitIdle(device);
+            terminatePipelines();
+            initPipelines();
+        }
+
+        shaderReloadRequired = false;
     }
 }
 
@@ -1433,6 +1460,21 @@ void drawUI(Cmd cmd)
             ImGui::EndCombo();
         }
 
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+        sceneChangeRequired = sceneChangeRequired || ImGui::Button("Reset model");
+
+        ImGui::TableNextColumn();
+        ImGui::TableNextColumn();
+        shaderReloadRequired = ImGui::Button("Reload shaders");
+        ImGui::SameLine(0, 0);
+        ImGui::PushStyleColor(ImGuiCol_Text, lastShaderReloadSuccessful ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+        ImGui::Bullet();
+        ImGui::PopStyleColor();
+
+        tableCellLabel("Cut width");
+        ImGui::SliderFloat("", &cuttingData.width, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
         tableCellLabel("Rotate model");
         ImGui::Checkbox("##Rotate model", &rotateScene);
         tableCellLabel("Show wireframe");
@@ -1452,9 +1494,6 @@ void drawUI(Cmd cmd)
         snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.indexCount, maxIndexCount);
         tableCellLabel("Index buffer");
         ImGui::ProgressBar((float)drawIndirectReadData.indexCount / maxIndexCount, ImVec2(-FLT_MIN, 0), buffer);
-
-        tableCellLabel("Cut width");
-        ImGui::SliderFloat("", &cuttingData.width, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 #ifdef DEBUG
         static const uint32_t debugChannels[]
@@ -1685,14 +1724,6 @@ void draw()
     {
         recreateRenderTargets();
         resizeRequired = false;
-    }
-
-    if (sceneChangeRequired)
-    {
-        vkDeviceWaitIdle(device);
-        loadModel(sceneInfos[selectedScene].sceneDirPath);
-        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
-        sceneChangeRequired = false;
     }
 
     if (cutState == CutState::CuttingInProgress)

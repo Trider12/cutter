@@ -79,8 +79,9 @@ void terminateShaderCompiler()
     shaderc_compile_options_release(options[2]);
 }
 
-void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, ShaderType type)
+bool compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, ShaderType type)
 {
+    ASSERT(compiler);
     uint32_t fileSize = readFile(shaderFilename, nullptr, 0);
     char *fileData = new char[fileSize];
     readFile(shaderFilename, (uint8_t *)fileData, fileSize);
@@ -88,15 +89,15 @@ void compileShaderIntoSpv(const char *shaderFilename, const char *spvFilename, S
     shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, fileData, fileSize, (shaderc_shader_kind)type, shaderFilename, "main", options[(uint8_t)type]);
     shaderc_compilation_status status = shaderc_result_get_compilation_status(result);
 
-    if (status == shaderc_compilation_status_compilation_error)
-    {
+    if (status)
         fputs(shaderc_result_get_error_message(result), stderr);
-    }
+    else
+        writeFile(spvFilename, shaderc_result_get_bytes(result), (uint32_t)shaderc_result_get_length(result));
 
-    ASSERT(status == shaderc_compilation_status_success);
-    writeFile(spvFilename, shaderc_result_get_bytes(result), (uint32_t)shaderc_result_get_length(result));
     shaderc_result_release(result);
     delete[] fileData;
+
+    return !status;
 }
 
 VkShaderModule createShaderModuleFromSpv(VkDevice device, const char *spvFilename)
