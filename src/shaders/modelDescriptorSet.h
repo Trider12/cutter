@@ -1,12 +1,12 @@
 #include "common.h"
 
 #ifdef COMPUTE
-#define QUALIFIER
+#define graphicsReadonly
 #else
-#define QUALIFIER readonly
+#define graphicsReadonly readonly
 #endif // COMPUTE
 
-layout(std430, set = 0, binding = 0) restrict QUALIFIER buffer DrawIndirectBlock
+layout(std430, set = 0, binding = 0) restrict graphicsReadonly buffer DrawIndirectBlock
 {
     DrawIndirectData drawData[2]; // one for reading, one for writing
 };
@@ -16,17 +16,17 @@ layout(std430, set = 0, binding = 1) restrict readonly buffer ReadIndicesBlock
     uint readIndices[];
 };
 
-layout(std430, set = 0, binding = 2) restrict QUALIFIER buffer WriteIndicesBlock
+layout(std430, set = 0, binding = 2) restrict graphicsReadonly buffer WriteIndicesBlock
 {
     uint writeIndices[];
 };
 
-layout(std430, set = 0, binding = 3) restrict QUALIFIER buffer PositionsBlock
+layout(std430, set = 0, binding = 3) restrict graphicsReadonly buffer PositionsBlock
 {
     Position positions[];
 };
 
-layout(std430, set = 0, binding = 4) restrict QUALIFIER buffer NormalUvsBlock
+layout(std430, set = 0, binding = 4) restrict graphicsReadonly buffer NormalUvsBlock
 {
     NormalUv normalUvs[];
 };
@@ -48,12 +48,16 @@ layout(std430, set = 0, binding = 7) uniform LightsBlock
 
 layout(std430, set = 0, binding = 8) uniform CameraBlock
 {
-    CameraData cameraData;
+    SceneData sceneData;
 };
 
-layout(set = 0, binding = 9) uniform texture2D brdfLut;
-layout(set = 0, binding = 10) uniform textureCube skyboxTextures[];
-layout(set = 0, binding = 11) uniform textureCube irradianceMaps[];
-layout(set = 0, binding = 12) uniform textureCube prefilteredMaps[];
-layout(set = 0, binding = 13) uniform sampler linearClampSampler;
-layout(set = 0, binding = 14) uniform sampler linearRepeatSampler;
+layout(set = 0, binding = 10) uniform sampler linearClampSampler;
+layout(set = 0, binding = 11) uniform sampler linearRepeatSampler;
+layout(set = 0, binding = 12) uniform sampler nearestClampSampler;
+layout(set = 0, binding = 13) uniform sampler nearestRepeatSampler;
+
+layout(set = 0, binding = 20) uniform texture2D brdfLut;
+layout(set = 0, binding = 21) uniform textureCube skyboxTextures[];
+layout(set = 0, binding = 22) uniform textureCube irradianceMaps[];
+layout(set = 0, binding = 23) uniform textureCube prefilteredMaps[];
+layout(set = 0, binding = 24) uniform utexture2D burnMapTexture;

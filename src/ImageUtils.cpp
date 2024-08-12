@@ -26,8 +26,6 @@ extern VmaAllocator allocator;
 
 extern VkQueue graphicsQueue;
 extern VkQueue computeQueue;
-extern VkCommandPool graphicsCommandPool;
-extern VkCommandPool computeCommandPool;
 
 static VkPipelineLayout commonPipelineLayout;
 static VkPipeline computeSkyboxPipeline;
@@ -772,18 +770,18 @@ static void generateImageMips(Image &image)
 #endif
     GpuImage gpuImage = createAndCopyGpuImage(image, queueFamily, usageFlags, image.faceCount == 1 ? GpuImageType::Image2D : GpuImageType::Image2DCubemap, SharingMode::Exclusive, imageLayout);
 
+    Cmd cmd = allocateCmd(queueFamily);
+    beginOneTimeCmd(cmd);
 #ifdef MIPS_BLIT
-    Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
-    beginOneTimeCmd(graphicsCmd);
     {
-        ScopedGpuZoneAutoCollect(graphicsCmd, "Mips Blit");
-        generateMipsBlit(graphicsCmd, gpuImage);
+        ScopedGpuZoneAutoCollect(cmd, "Mips Blit");
+        generateMipsBlit(cmd, gpuImage);
     }
-    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
-    freeCmd(graphicsCmd);
+    endAndSubmitOneTimeCmd(cmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
 #else
     generateMipsCompute(gpuImage);
 #endif
+    freeCmd(cmd);
 
     copyImage(gpuImage, image, queueFamily);
     destroyGpuImage(gpuImage);
@@ -893,7 +891,7 @@ static void normalizeNormalMap(Image &normalMapImage)
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
     uint32_t workGroupCount = findBestWorkGroupCount2d(max(normalMapImage.width, normalMapImage.height));
-    Cmd computeCmd = allocateCmd(computeCommandPool);
+    Cmd computeCmd = allocateCmd(QueueFamily::Compute);
     beginOneTimeCmd(computeCmd);
     {
         ScopedGpuZoneAutoCollect(computeCmd, "Normalize normal map");
@@ -930,7 +928,7 @@ void computeBrdfLut(const char *brdfLutPath)
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
     uint32_t computeBrdfLutWorkGroupCount = findBestWorkGroupCount2d(brdfLutSize);
-    Cmd computeCmd = allocateCmd(computeCommandPool);
+    Cmd computeCmd = allocateCmd(QueueFamily::Compute);
     beginOneTimeCmd(computeCmd);
     {
         ScopedGpuZoneAutoCollect(computeCmd, "Compute BRDF LUT");
@@ -1030,7 +1028,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     uint32_t computeIrradianceMapWorkGroupCount = findBestWorkGroupCount2d(irradianceMapFaceSize);
     uint32_t computePrefilteredMapWorkGroupCount = findBestWorkGroupCount2d(prefilteredMapFaceSize);
 
-    Cmd computeCmd1 = allocateCmd(computeCommandPool);
+    Cmd computeCmd1 = allocateCmd(QueueFamily::Compute);
     beginOneTimeCmd(computeCmd1);
     {
         ScopedGpuZoneAutoCollect(computeCmd1, "Compute skybox");
@@ -1061,7 +1059,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     }
     endAndSubmitOneTimeCmd(computeCmd1, computeQueue, nullptr, &ownershipReleaseFinishedInfo1, WaitForFence::No);
 
-    Cmd graphicsCmd = allocateCmd(graphicsCommandPool);
+    Cmd graphicsCmd = allocateCmd(QueueFamily::Graphics);
     beginOneTimeCmd(graphicsCmd);
     {
         ScopedGpuZoneAutoCollect(graphicsCmd, "Mips blit");
@@ -1085,7 +1083,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
     }
     endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, &ownershipReleaseFinishedInfo1, &ownershipReleaseFinishedInfo2, WaitForFence::No);
 
-    Cmd computeCmd2 = allocateCmd(computeCommandPool);
+    Cmd computeCmd2 = allocateCmd(QueueFamily::Compute);
     beginOneTimeCmd(computeCmd2);
     {
         ScopedGpuZone(computeCmd2, "Compute irradiance");

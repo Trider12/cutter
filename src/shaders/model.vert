@@ -21,8 +21,8 @@ void main()
     vec4 norm = vec4(unpackSnorm8(ivec3(normalUvs[index].x, normalUvs[index].y, normalUvs[index].z)), 0.f);
     vec2 uv = vec2(normalUvs[index].u, normalUvs[index].v);
     TransformData td = transforms[positions[index].transformIndex];
-    mat4 modelMat = cameraData.sceneMat * td.toWorldMat;
-    mat4 mvp = cameraData.projMat * cameraData.viewMat * modelMat;
+    mat4 modelMat = sceneData.sceneMat * td.toWorldMat;
+    mat4 mvp = sceneData.projMat * sceneData.viewMat * modelMat;
     uint mod = gl_VertexIndex % 3;
 
     gl_Position = mvp * pos;

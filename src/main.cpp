@@ -90,6 +90,8 @@ struct ShaderTable
     defineShader(drawSkybox, ".frag", Fragment);
     defineShader(line, ".vert", Vertex);
     defineShader(line, ".frag", Fragment);
+    defineShader(renderBurnMap, ".vert", Vertex);
+    defineShader(renderBurnMap, ".frag", Fragment);
     defineShader(computeSkybox, ".comp", Compute);
     defineShader(computeBrdfLut, ".comp", Compute);
     defineShader(computeIrradianceMap, ".comp", Compute);
@@ -210,7 +212,6 @@ VkExtent2D swapchainImageExtent;
 std::vector<VkImage> swapchainImages;
 std::vector<VkImageView> swapchainImageViews;
 GpuImage depthImage;
-bool resizeNeeded;
 
 VkDescriptorPool descriptorPool;
 VkDescriptorSetLayout globalDescriptorSetLayout;
@@ -226,6 +227,8 @@ VkPipeline linePipeline;
 VkPipelineLayout linePipelineLayout;
 VkPipeline cuttingPipeline;
 VkPipelineLayout cuttingPipelineLayout;
+VkPipeline burnMapPipeline;
+VkPipelineLayout burnMapPipelineLayout;
 
 GpuBuffer modelBuffer;
 GpuBuffer globalUniformBuffer;
@@ -237,25 +240,29 @@ GpuImage skyboxImages[countOf(hdriImagePaths)];
 GpuImage irradianceMaps[countOf(hdriImagePaths)];
 GpuImage prefilteredMaps[countOf(hdriImagePaths)];
 GpuImage brdfLut;
+GpuImage burnMapImage;
 uint32_t selectedSkybox = 1;
 
 VkSampler linearClampSampler;
 VkSampler linearRepeatSampler;
+VkSampler nearestClampSampler;
+VkSampler nearestRepeatSampler;
+
+Cmd graphicsCmd;
+Cmd computeCmd;
+VkFence computeFence;
 
 struct FrameData
 {
     VkSemaphore imageAcquiredSemaphore, renderFinishedSemaphore;
     VkFence renderFinishedFence;
     Cmd cmd;
-    CameraData cameraData;
+    SceneData sceneData;
 };
 
 const uint8_t maxFramesInFlight = 2;
 uint8_t frameIndex = 0;
 FrameData frames[maxFramesInFlight];
-
-Cmd computeCmd;
-VkFence computeFence;
 
 FlyCamera camera;
 Scene model;
@@ -455,21 +462,16 @@ void recreateRenderTargets()
 void initFrameData()
 {
     ZoneScoped;
-    VkCommandPoolCreateInfo commandPoolCreateInfo = initCommandPoolCreateInfo(graphicsQueueFamilyIndex, true);
-    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frames[0].cmd.commandPool));
-    commandPoolCreateInfo = initCommandPoolCreateInfo(computeQueueFamilyIndex, true);
-    vkVerify(vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &computeCmd.commandPool));
-    computeCmd = allocateCmd(computeCmd.commandPool);
-
+    graphicsCmd = allocateCmd(QueueFamily::Graphics);
+    computeCmd = allocateCmd(QueueFamily::Compute);
     VkFenceCreateInfo fenceCreateInfo = initFenceCreateInfo();
     vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &computeFence));
-
     fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     VkSemaphoreCreateInfo semaphoreCreateInfo = initSemaphoreCreateInfo();
 
     for (FrameData &frame : frames)
     {
-        frame.cmd = allocateCmd(frames[0].cmd.commandPool);
+        frame.cmd = allocateCmd(QueueFamily::Graphics);
 
         vkVerify(vkCreateFence(device, &fenceCreateInfo, nullptr, &frame.renderFinishedFence));
         vkVerify(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frame.imageAcquiredSemaphore));
@@ -479,8 +481,6 @@ void initFrameData()
 
 void terminateFrameData()
 {
-    vkDestroyCommandPool(device, frames[0].cmd.commandPool, nullptr);
-    vkDestroyCommandPool(device, computeCmd.commandPool, nullptr);
     vkDestroyFence(device, computeFence, nullptr);
 
     for (FrameData &frame : frames)
@@ -498,6 +498,10 @@ void initDescriptors()
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearClampSampler));
     samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &linearRepeatSampler));
+    samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &nearestClampSampler));
+    samplerCreateInfo = initSamplerCreateInfo(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    vkVerify(vkCreateSampler(device, &samplerCreateInfo, nullptr, &nearestRepeatSampler));
 
     VkDescriptorPoolSize poolSizes[]
     {
@@ -522,12 +526,15 @@ void initDescriptors()
         {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // materials
         {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // lights
         {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // camera
-        {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // brdf lut
-        {10, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}, // skybox
-        {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
-        {12, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
-        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
-        {14, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler}
+        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
+        {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler},
+        {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &nearestClampSampler},
+        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &nearestRepeatSampler},
+        {20, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // brdf lut
+        {21, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}, // skybox
+        {22, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
+        {23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
+        {24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // burn map texture
     };
     VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
 
@@ -548,6 +555,8 @@ void terminateDescriptors()
 {
     vkDestroySampler(device, linearClampSampler, nullptr);
     vkDestroySampler(device, linearRepeatSampler, nullptr);
+    vkDestroySampler(device, nearestClampSampler, nullptr);
+    vkDestroySampler(device, nearestRepeatSampler, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalDescriptorSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, texturesDescriptorSetLayout, nullptr);
@@ -634,6 +643,24 @@ void initPipelines()
     vkDestroyShaderModule(device, vertexShader, nullptr);
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
+    // Burn
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pipelineLayoutCreateInfo.setLayoutCount = 1;
+    vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &burnMapPipelineLayout));
+    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderBurnMapVertexShader.shaderSpvPath);
+    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderBurnMapFragmentShader.shaderSpvPath);
+    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
+    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
+    rasterizationState.cullMode = VK_CULL_MODE_NONE;
+    depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
+    blendState.blendEnable = false;
+    graphicsPipelineCreateInfo.layout = burnMapPipelineLayout;
+    VkFormat format = VK_FORMAT_R32_UINT;
+    renderingInfo = initPipelineRenderingCreateInfo(&format, 1);
+    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &burnMapPipeline));
+    vkDestroyShaderModule(device, vertexShader, nullptr);
+    vkDestroyShaderModule(device, fragmentShader, nullptr);
+
     // Cutting
     pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushRange.size = sizeof(CuttingData);
@@ -656,6 +683,8 @@ void terminatePipelines()
     vkDestroyPipeline(device, cuttingPipeline, nullptr);
     vkDestroyPipelineLayout(device, linePipelineLayout, nullptr);
     vkDestroyPipeline(device, linePipeline, nullptr);
+    vkDestroyPipelineLayout(device, burnMapPipelineLayout, nullptr);
+    vkDestroyPipeline(device, burnMapPipeline, nullptr);
 }
 
 struct ImguiVulkanContext
@@ -772,6 +801,13 @@ void loadModel(const char *sceneDirPath)
         setGpuBufferName(drawIndirectBuffer, NAMEOF(drawIndirectBuffer));
     }
 
+    if (!burnMapImage.image)
+    {
+        burnMapImage = createGpuImage(VK_FORMAT_R32_UINT, { 2048, 2048 }, 1,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, GpuImageType::Image2D);
+        setGpuImageName(burnMapImage, NAMEOF(burnMapImage));
+    }
+
     model = loadSceneFromFile(sceneDirPath);
 
     for (uint8_t j = 0; j < countOf(materialInfos); j++)
@@ -796,11 +832,11 @@ void loadModel(const char *sceneDirPath)
     ASSERT(transformsSize <= maxTransformsSize);
     ASSERT(materialsSize <= maxMaterialsSize);
 
-    memcpy((char *)stagingBuffer.mappedData + indicesOffset, model.indices.data(), indicesSize);
-    memcpy((char *)stagingBuffer.mappedData + positionsOffset, model.positions.data(), positionsSize);
-    memcpy((char *)stagingBuffer.mappedData + normalUvsOffset, model.normalUvs.data(), normalUvsSize);
-    memcpy((char *)stagingBuffer.mappedData + transformsOffset, model.transforms.data(), transformsSize);
-    memcpy((char *)stagingBuffer.mappedData + materialsOffset, model.materials.data(), materialsSize);
+    memcpy((char *)stagingBufferMappedData + indicesOffset, model.indices.data(), indicesSize);
+    memcpy((char *)stagingBufferMappedData + positionsOffset, model.positions.data(), positionsSize);
+    memcpy((char *)stagingBufferMappedData + normalUvsOffset, model.normalUvs.data(), normalUvsSize);
+    memcpy((char *)stagingBufferMappedData + transformsOffset, model.transforms.data(), transformsSize);
+    memcpy((char *)stagingBufferMappedData + materialsOffset, model.materials.data(), materialsSize);
     VkBufferCopy copies[]
     {
         {indicesOffset, maxReadIndicesOffset, indicesSize},
@@ -832,6 +868,8 @@ void loadModel(const char *sceneDirPath)
         {modelBuffer.buffer, maxMaterialsOffset, maxMaterialsSize}
     };
 
+    VkDescriptorImageInfo burnMapImageInfo { nullptr, burnMapImage.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
     for (uint8_t i = 0; i < modelTextureCount; i++)
     {
         destroyGpuImage(modelTextures[i]);
@@ -861,10 +899,38 @@ void loadModel(const char *sceneDirPath)
         initWriteDescriptorSetBuffer(globalDescriptorSet, 4, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 4),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 5, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 5),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 6),
+        initWriteDescriptorSetImage(globalDescriptorSet, 24, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &burnMapImageInfo),
         initWriteDescriptorSetImage(texturesDescriptorSet, 0, modelTextureCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos)
     };
 
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
+
+    beginOneTimeCmd(graphicsCmd);
+    {
+        ScopedGpuZoneAutoCollect(graphicsCmd, "Clear burn map image");
+        VkClearColorValue clearValue {};
+        VkImageSubresourceRange range = initImageSubresourceRange();
+        ImageBarrier imageBarrier {};
+        imageBarrier.image = burnMapImage;
+        imageBarrier.srcStageMask = StageFlags::FragmentShader;
+        imageBarrier.dstStageMask = StageFlags::Clear;
+        imageBarrier.srcAccessMask = AccessFlags::Read;
+        imageBarrier.dstAccessMask = AccessFlags::Write;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        pipelineBarrier(graphicsCmd, nullptr, 0, &imageBarrier, 1);
+        vkCmdClearColorImage(graphicsCmd.commandBuffer, burnMapImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &range);
+        imageBarrier = {};
+        imageBarrier.image = burnMapImage;
+        imageBarrier.srcStageMask = StageFlags::Clear;
+        imageBarrier.dstStageMask = StageFlags::FragmentShader;
+        imageBarrier.srcAccessMask = AccessFlags::Write;
+        imageBarrier.dstAccessMask = AccessFlags::Read;
+        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        pipelineBarrier(graphicsCmd, nullptr, 0, &imageBarrier, 1);
+    }
+    endAndSubmitOneTimeCmd(graphicsCmd, graphicsQueue, nullptr, nullptr, nullptr);
 }
 
 void loadEnvMaps()
@@ -917,10 +983,10 @@ void loadEnvMaps()
 
     VkWriteDescriptorSet writes[]
     {
-        initWriteDescriptorSetImage(globalDescriptorSet, 9, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
-        initWriteDescriptorSetImage(globalDescriptorSet, 10, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
-        initWriteDescriptorSetImage(globalDescriptorSet, 11, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
-        initWriteDescriptorSetImage(globalDescriptorSet, 12, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 20, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &brdfLutImageInfo),
+        initWriteDescriptorSetImage(globalDescriptorSet, 21, countOf(skyboxImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, skyboxImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 22, countOf(irradianceImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, irradianceImageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 23, countOf(prefilteredImageInfos), VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, prefilteredImageInfos),
     };
 
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
@@ -954,7 +1020,7 @@ void loadLights()
     lightData.lights[2].intensity = meshopt_quantizeHalf(lightDirsAndIntensitiesUI[2].w);
 
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
-    uint32_t bufferSize = aligned(sizeof(LightingData), uboAlignment) + aligned(sizeof(CameraData), uboAlignment) * maxFramesInFlight;
+    uint32_t bufferSize = aligned(sizeof(LightingData), uboAlignment) + aligned(sizeof(SceneData), uboAlignment) * maxFramesInFlight;
 
     globalUniformBuffer = createGpuBuffer(bufferSize,
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -965,7 +1031,7 @@ void loadLights()
     VkDescriptorBufferInfo bufferInfos[]
     {
         {globalUniformBuffer.buffer, 0, sizeof(LightingData)},
-        {globalUniformBuffer.buffer, aligned(sizeof(LightingData), uboAlignment), aligned(sizeof(CameraData), uboAlignment)}
+        {globalUniformBuffer.buffer, aligned(sizeof(LightingData), uboAlignment), aligned(sizeof(SceneData), uboAlignment)}
     };
 
     VkWriteDescriptorSet writes[]
@@ -1010,6 +1076,7 @@ void terminateScene()
     }
 
     destroyGpuImage(brdfLut);
+    destroyGpuImage(burnMapImage);
 }
 
 void glfwKeyCallback(GLFWwindow *wnd, int key, int scancode, int action, int mods)
@@ -1042,7 +1109,7 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
 
     if (action == GLFW_PRESS)
     {
-        if (button == GLFW_MOUSE_BUTTON_1)
+        if (button == GLFW_MOUSE_BUTTON_1 && cutState == CutState::None)
         {
             cursorCaptured = true;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1181,13 +1248,16 @@ void updateLogic(float delta)
     glm::mat4 sceneMat = glm::eulerAngleY(glm::half_pi<float>() * sceneRotationTime);
     float aspectRatio = (float)swapchainImageExtent.width / swapchainImageExtent.height;
     glm::mat4 projMat = glm::perspective(glm::radians(45.0f), aspectRatio, 1000.f, 0.1f);
+    glm::mat4 invViewMat = camera.getCameraMatrix();
+    glm::mat4 invProjMat = glm::inverse(projMat);
 
     FrameData &frame = frames[frameIndex];
-    frame.cameraData.sceneMat = sceneMat;
-    frame.cameraData.viewMat = camera.getViewMatrix();
-    frame.cameraData.invViewMat = camera.getCameraMatrix();
-    frame.cameraData.projMat = projMat;
-    frame.cameraData.sceneConfig = sceneConfig;
+    frame.sceneData.sceneMat = sceneMat;
+    frame.sceneData.sceneConfig = sceneConfig;
+    frame.sceneData.viewMat = camera.getViewMatrix();;
+    frame.sceneData.projMat = projMat;
+    frame.sceneData.invViewMat = invViewMat;
+    frame.sceneData.invProjMat = invProjMat;
 
     switch (cutState)
     {
@@ -1201,7 +1271,7 @@ void updateLogic(float delta)
     }
     case CutState::CutLineFinished:
     {
-        glm::mat4 invViewProjMat = frame.cameraData.invViewMat * glm::inverse(projMat);
+        glm::mat4 invViewProjMat = invViewMat * invProjMat;
         glm::vec3 p1 = screenToWorld(lineData.p1, lineData.windowRes, invViewProjMat);
         glm::vec3 p2 = screenToWorld(lineData.p2, lineData.windowRes, invViewProjMat);
         glm::vec3 p3 = camera.getPosition();
@@ -1223,33 +1293,35 @@ void update(float delta)
     updateLogic(delta);
 }
 
+static struct DynamicOffsets
+{
+    uint32_t offsets[8];
+    uint32_t offsetCount;
+} dynamicOffsets;
+
+void prepareDrawState(const FrameData &frame)
+{
+    uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
+    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
+    uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
+    uint32_t cameraDataDynamicOffset = aligned(sizeof(SceneData), uboAlignment) * frameIndex;
+    uint32_t maxIndicesOffset = aligned(maxIndicesSize, sboAlignment);
+    uint32_t readIndicesOffset = drawDataReadIndex * maxIndicesOffset;
+    uint32_t writeIndicesOffset = !drawDataReadIndex * maxIndicesOffset;
+
+    dynamicOffsets.offsets[0] = readIndicesOffset;
+    dynamicOffsets.offsets[1] = writeIndicesOffset;
+    dynamicOffsets.offsets[2] = cameraDataDynamicOffset;
+    dynamicOffsets.offsetCount = 3;
+
+    memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
+    memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.sceneData, sizeof(SceneData));
+}
+
 void drawModel(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, "Model");
-    FrameData &frame = frames[frameIndex];
-    uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
-    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
-    uint32_t cameraDataStaticOffset = aligned(sizeof(LightingData), uboAlignment);
-    uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
-    uint32_t maxIndicesOffset = aligned(maxIndicesSize, sboAlignment);
-    uint32_t readIndicesOffset = drawDataReadIndex * maxIndicesOffset;
-    uint32_t writeIndicesOffset = !drawDataReadIndex * maxIndicesOffset;
-    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
-
-    memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
-    memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.cameraData, sizeof(CameraData));
-
-    uint32_t pushData[]
-    {
-        selectedSkybox,
-        selectedMaterial,
-#ifdef DEBUG
-        debugFlags
-#endif // DEBUG
-    };
-    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
-    vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), pushData);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1267,9 +1339,19 @@ void drawModel(Cmd cmd)
     scissor.extent.height = swapchainImageExtent.height;
     vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
 
+    uint32_t pushData[]
+    {
+        selectedSkybox,
+        selectedMaterial,
+#ifdef DEBUG
+        debugFlags
+#endif // DEBUG
+    };
+    vkCmdPushConstants(cmd.commandBuffer, modelPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), pushData);
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
-    uint32_t dynamicOffsets[] { readIndicesOffset, writeIndicesOffset, cameraDataDynamicOffset };
-    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipelineLayout, 0, countOf(descriptorSets), descriptorSets, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
+    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
     vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
 }
 
@@ -1296,7 +1378,8 @@ void drawUI(Cmd cmd)
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    ////////
+
+#pragma region UiCode
     //ImGui::ShowDemoWindow();
     ImGui::Begin(appName, nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
@@ -1385,9 +1468,10 @@ void drawUI(Cmd cmd)
             DEBUG_SHOW_IRRADIANCE,
             DEBUG_SHOW_PREFILTERED,
             DEBUG_SHOW_DIFFUSE,
-            DEBUG_SHOW_SPECULAR
+            DEBUG_SHOW_SPECULAR,
+            DEBUG_SHOW_BURN
         };
-        static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular" };
+        static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular", "Burn" };
         static uint8_t selectedChannel = 0;
         static_assert(countOf(debugChannels) == countOf(debugChannelNames), "");
 
@@ -1453,7 +1537,8 @@ void drawUI(Cmd cmd)
     }
 
     ImGui::End();
-    ////////
+#pragma endregion UiCode
+
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd.commandBuffer);
 }
@@ -1462,8 +1547,8 @@ void drawLine(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, "Line");
-    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
     vkCmdPushConstants(cmd.commandBuffer, linePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LineData), &lineData);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
     vkCmdDraw(cmd.commandBuffer, 6, 1, 0, 0);
 }
 
@@ -1472,16 +1557,10 @@ void dispatchCutting()
     ZoneScoped;
     vkVerify(vkResetFences(device, 1, &computeFence));
     vkVerify(vkResetCommandBuffer(computeCmd.commandBuffer, 0));
-    uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
-    uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
-    uint32_t cameraDataDynamicOffset = aligned(sizeof(CameraData), uboAlignment) * frameIndex;
-    uint32_t maxIndicesOffset = aligned(maxIndicesSize, sboAlignment);
-    uint32_t readIndicesOffset = drawDataReadIndex * maxIndicesOffset;
-    uint32_t writeIndicesOffset = !drawDataReadIndex * maxIndicesOffset;
-    uint32_t drawIndirectDataWriteOffset = !drawDataReadIndex * sizeof(DrawIndirectData);
 
     DrawIndirectData drawIndirectWriteData = drawIndirectReadData;
     drawIndirectWriteData.indexCount = 0;
+    uint32_t drawIndirectDataWriteOffset = !drawDataReadIndex * sizeof(DrawIndirectData);
     memcpy((char *)drawIndirectBuffer.mappedData + drawIndirectDataWriteOffset, &drawIndirectWriteData, sizeof(DrawIndirectData));
 
     beginOneTimeCmd(computeCmd);
@@ -1490,11 +1569,9 @@ void dispatchCutting()
         ASSERT(drawIndirectReadData.indexCount % 3 == 0);
         uint32_t groupSizeX = 256;
         uint32_t groupCountX = (drawIndirectReadData.indexCount / 3 + groupSizeX - 1) / groupSizeX;
-        VkDescriptorSet descriptorSets[] { globalDescriptorSet };
-        uint32_t dynamicOffsets[] { readIndicesOffset, writeIndicesOffset, cameraDataDynamicOffset };
-        vkCmdBindDescriptorSets(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipelineLayout, 0, countOf(descriptorSets), descriptorSets, countOf(dynamicOffsets), dynamicOffsets);
-        vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipeline);
+        vkCmdBindDescriptorSets(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
         vkCmdPushConstants(computeCmd.commandBuffer, cuttingPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CuttingData), &cuttingData);
+        vkCmdBindPipeline(computeCmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cuttingPipeline);
         vkCmdDispatch(computeCmd.commandBuffer, groupCountX, 1, 1);
     }
     endAndSubmitOneTimeCmd(computeCmd, computeQueue, nullptr, nullptr, computeFence);
@@ -1502,18 +1579,120 @@ void dispatchCutting()
 
 void readCuttingData()
 {
-    drawDataReadIndex = !drawDataReadIndex; // rotate draw and index buffers
+    drawDataReadIndex = !drawDataReadIndex; // swap draw and index buffers
     uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
     memcpy(&drawIndirectReadData, (char *)drawIndirectBuffer.mappedData + drawIndirectDataReadOffset, sizeof(DrawIndirectData));
 }
 
+void mainDrawPass(Cmd cmd, uint32_t swapchainImageIndex)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, "Main draw pass");
+    VkClearValue colorClearValue {}, depthClearValue {};
+    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
+    VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
+    VkRenderingInfoKHR renderingInfo = initRenderingInfo(swapchainImageExtent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
+
+    ImageBarrier imageBarrier {};
+    imageBarrier.image.image = swapchainImages[swapchainImageIndex];
+    imageBarrier.srcStageMask = StageFlags::ColorAttachmentOutput; // wait for acquire semaphore
+    imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.srcAccessMask = AccessFlags::None;
+    imageBarrier.dstAccessMask = AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+    vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
+    drawModel(cmd);
+    drawSkybox(cmd);
+    drawUI(cmd);
+    if (cutState == CutState::CutLineStarted)
+    {
+        drawLine(cmd);
+    }
+    vkCmdEndRenderingKHR(cmd.commandBuffer);
+
+    imageBarrier.srcStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput; // make render semaphore wait
+    imageBarrier.srcAccessMask = AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::None;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+}
+
+void burnMapPass(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, "Burn map pass");
+
+    VkExtent2D extent { burnMapImage.extent.width, burnMapImage.extent.height };
+    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(burnMapImage.imageView, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, nullptr);
+    VkRenderingInfoKHR renderingInfo = initRenderingInfo(extent, &colorAttachmentInfo, 1, nullptr);
+
+    ImageBarrier imageBarrier {};
+    imageBarrier.image.image = burnMapImage.image;
+    imageBarrier.srcStageMask = StageFlags::FragmentShader;
+    imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.srcAccessMask = AccessFlags::Read;
+    imageBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+    vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
+
+    VkViewport viewport {};
+    viewport.x = 0;
+    viewport.y = (float)burnMapImage.extent.height;
+    viewport.width = (float)burnMapImage.extent.width;
+    viewport.height = -(float)burnMapImage.extent.height;
+    viewport.minDepth = 0.f;
+    viewport.maxDepth = 1.f;
+    vkCmdSetViewport(cmd.commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor {};
+    scissor.offset.x = 0;
+    scissor.offset.y = 0;
+    scissor.extent = extent;
+    vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, burnMapPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdPushConstants(cmd.commandBuffer, burnMapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(CuttingData), &cuttingData);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, burnMapPipeline);
+    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
+    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
+
+    vkCmdEndRenderingKHR(cmd.commandBuffer);
+
+    imageBarrier.srcStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.dstStageMask = StageFlags::FragmentShader;
+    imageBarrier.srcAccessMask = AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::Read;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+}
+
+static bool resizeRequired = false;
+static bool burnMapPassRequired = false;
+
 void draw()
 {
     ZoneScoped;
-    if (resizeNeeded)
+    if (resizeRequired)
     {
         recreateRenderTargets();
-        resizeNeeded = false;
+        resizeRequired = false;
+    }
+
+    if (sceneChangeRequired)
+    {
+        vkDeviceWaitIdle(device);
+        loadModel(sceneInfos[selectedScene].sceneDirPath);
+        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
+        sceneChangeRequired = false;
     }
 
     if (cutState == CutState::CuttingInProgress)
@@ -1528,6 +1707,7 @@ void draw()
     {
         dispatchCutting();
         cutState = CutState::CuttingInProgress;
+        burnMapPassRequired = true;
     }
 
     FrameData &frame = frames[frameIndex];
@@ -1541,72 +1721,41 @@ void draw()
         VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_NONE_KHR);
         VkSubmitInfo2 submitInfo = initSubmitInfo(nullptr, &waitSemaphoreSubmitInfo, nullptr);
         vkVerify(vkQueueSubmit2KHR(graphicsQueue, 1, &submitInfo, nullptr));
-        resizeNeeded = true;
+        resizeRequired = true;
         return;
     }
 
     vkAssert(result);
     vkVerify(vkResetFences(device, 1, &frame.renderFinishedFence));
     vkVerify(vkResetCommandBuffer(frame.cmd.commandBuffer, 0));
-    Cmd cmd = frame.cmd;
-    beginOneTimeCmd(cmd);
+
+    prepareDrawState(frame);
+    beginOneTimeCmd(frame.cmd);
     {
-        ScopedGpuZoneAutoCollect(cmd, "Draw");
+        ScopedGpuZoneAutoCollect(frame.cmd, "Draw");
 
-        VkClearValue colorClearValue {}, depthClearValue {};
-        VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(swapchainImageViews[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
-        VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
-        VkRenderingInfoKHR renderingInfo = initRenderingInfo(swapchainImageExtent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
+        if (burnMapPassRequired)
+        {
+            burnMapPass(frame.cmd);
+            burnMapPassRequired = false;
+        }
 
-        ImageBarrier imageBarrier {};
-        imageBarrier.image.image = swapchainImages[swapchainImageIndex];
-        imageBarrier.srcStageMask = StageFlags::ColorAttachment; // wait for acquire semaphore
-        imageBarrier.dstStageMask = StageFlags::ColorAttachment;
-        imageBarrier.srcAccessMask = AccessFlags::None;
-        imageBarrier.dstAccessMask = AccessFlags::Write;
-        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
-
-        vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
-        drawModel(cmd);
-        drawSkybox(cmd);
-        drawUI(cmd);
-        if (cutState == CutState::CutLineStarted)
-            drawLine(cmd);
-        vkCmdEndRenderingKHR(cmd.commandBuffer);
-
-        imageBarrier.srcStageMask = StageFlags::ColorAttachment;
-        imageBarrier.dstStageMask = StageFlags::ColorAttachment; // make render semaphore wait
-        imageBarrier.srcAccessMask = AccessFlags::Write;
-        imageBarrier.dstAccessMask = AccessFlags::None;
-        imageBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        imageBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+        mainDrawPass(frame.cmd, swapchainImageIndex);
     }
-
     VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR);
     VkSemaphoreSubmitInfoKHR signalSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.renderFinishedSemaphore, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR);
-    endAndSubmitOneTimeCmd(cmd, graphicsQueue, &waitSemaphoreSubmitInfo, &signalSemaphoreSubmitInfo, frame.renderFinishedFence);
+    endAndSubmitOneTimeCmd(frame.cmd, graphicsQueue, &waitSemaphoreSubmitInfo, &signalSemaphoreSubmitInfo, frame.renderFinishedFence);
 
     VkPresentInfoKHR presentInfo = initPresentInfo(&swapchain, &frame.renderFinishedSemaphore, &swapchainImageIndex);
     result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
     {
-        resizeNeeded = true;
+        resizeRequired = true;
     }
     else
     {
-        vkVerify(result);
-    }
-
-    if (sceneChangeRequired)
-    {
-        vkDeviceWaitIdle(device);
-        loadModel(sceneInfos[selectedScene].sceneDirPath);
-        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
-        sceneChangeRequired = false;
+        vkAssert(result);
     }
 
     frameIndex = (frameIndex + 1) % maxFramesInFlight;

@@ -31,9 +31,9 @@ void main()
         transforms[trianglePositions[2].transformIndex]);
 
     vec4 worldPositions[3] = vec4[](
-        cameraData.sceneMat * tds[0].toWorldMat * vec4(localPositions[0], 1.f),
-        cameraData.sceneMat * tds[1].toWorldMat * vec4(localPositions[1], 1.f),
-        cameraData.sceneMat * tds[2].toWorldMat * vec4(localPositions[2], 1.f));
+        sceneData.sceneMat * tds[0].toWorldMat * vec4(localPositions[0], 1.f),
+        sceneData.sceneMat * tds[1].toWorldMat * vec4(localPositions[1], 1.f),
+        sceneData.sceneMat * tds[2].toWorldMat * vec4(localPositions[2], 1.f));
 
     vec3 distsToPlane = vec3(dot(worldPositions[0], cuttingData.normalAndD), dot(worldPositions[1], cuttingData.normalAndD), dot(worldPositions[2], cuttingData.normalAndD));
     vec3 distsA = distsToPlane - 0.5f * cuttingData.width; // plane A: same normal, move by `0.5f * width` along it

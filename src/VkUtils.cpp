@@ -189,7 +189,7 @@ VkSamplerCreateInfo initSamplerCreateInfo(VkFilter filter, VkSamplerAddressMode 
     samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerCreateInfo.minFilter = filter;
     samplerCreateInfo.magFilter = filter;
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerCreateInfo.mipmapMode = (VkSamplerMipmapMode)filter;
     samplerCreateInfo.addressModeU = addressMode;
     samplerCreateInfo.addressModeV = addressMode;
     samplerCreateInfo.addressModeW = addressMode;

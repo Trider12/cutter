@@ -48,14 +48,13 @@ struct GpuImage
     GpuImageType type;
 };
 
-extern VmaAllocator allocator;
-extern GpuBuffer stagingBuffer;
-
 void initGraphics();
 
 void terminateGraphics();
 
 Cmd allocateCmd(VkCommandPool pool);
+
+Cmd allocateCmd(QueueFamily queueFamily);
 
 void freeCmd(Cmd cmd);
 
@@ -76,7 +75,7 @@ GpuImage createGpuImage(VkFormat format,
 
 void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily);
+void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily, VkImageLayout srcLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
 GpuImage createAndCopyGpuImage(const Image &image,
     QueueFamily dstQueueFamily,
@@ -97,10 +96,11 @@ enum class StageFlags : uint16_t
     VertexShader = 1 << 1,
     FragmentShader = 1 << 2,
     ComputeShader = 1 << 3,
-    ColorAttachment = 1 << 4,
-    Copy = 1 << 5,
-    Blit = 1 << 6,
-    Resolve = 1 << 7
+    ColorAttachmentOutput = 1 << 4,
+    Clear = 1 << 5,
+    Copy = 1 << 6,
+    Blit = 1 << 7,
+    Resolve = 1 << 8
 };
 defineEnumOperators(StageFlags, uint16_t);
 
@@ -146,19 +146,25 @@ void pipelineBarrier(Cmd cmd,
     BufferBarrier *bufferBarriers,
     uint32_t bufferBarrierCount,
     ImageBarrier *imageBarriers,
-    uint32_t imageBarrierCount);
+    uint32_t imageBarrierCount,
+    bool byRegion = false);
 
 void pipelineBarrier(VkCommandBuffer cmd,
     BufferBarrier *bufferBarriers,
     uint32_t bufferBarrierCount,
     ImageBarrier *imageBarriers,
-    uint32_t imageBarrierCount);
+    uint32_t imageBarrierCount,
+    bool byRegion = false);
 
 void beginOneTimeCmd(Cmd cmd);
+
+void endOneTimeCmd(Cmd cmd);
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, VkFence fence);
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
+
+extern char *stagingBufferMappedData;
 
 void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount);
 

@@ -56,7 +56,7 @@ float edgeFactor(vec3 bary)
 void main()
 {
     MaterialData md = materials[materialIndex];
-    vec3 cameraPos = cameraData.invViewMat[3].xyz;
+    vec3 cameraPos = sceneData.invViewMat[3].xyz;
     vec3 viewVec = cameraPos - fsIn.pos;
     vec3 N = normalize(fsIn.norm);
     vec3 V = normalize(viewVec);
@@ -64,7 +64,7 @@ void main()
     if(!gl_FrontFacing)
         N = -N;
 
-    if(bool(cameraData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
+    if(bool(sceneData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
         N = getNormal(N, fsIn.pos, fsIn.uv, md.normalTexIndex);
 
     vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(textures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
@@ -83,7 +83,7 @@ void main()
     vec3 fDiff, fSpec;
     vec3 LoDiff = vec3(0.f), LoSpec = vec3(0.f);
 
-    if(bool(cameraData.sceneConfig & SCENE_USE_LIGHTS))
+    if(bool(sceneData.sceneConfig & SCENE_USE_LIGHTS))
     {
         for(uint i = 0; i < lightData.dirLightCount; i++)
         {
@@ -110,7 +110,7 @@ void main()
 //        }
     }
 
-    if(bool(cameraData.sceneConfig & SCENE_USE_IBL))
+    if(bool(sceneData.sceneConfig & SCENE_USE_IBL))
     {
         envBRDF(albedo, roughness, metallic, irradiance, prefiltered, brdf, fDiff, fSpec);
         LoDiff += fDiff * ao;
@@ -118,6 +118,8 @@ void main()
     }
 
     vec3 outColor = reinhardTonemap(LoDiff + LoSpec);
+
+    uint burn = texture(usampler2D(burnMapTexture, nearestRepeatSampler), fsIn.uv).r;
 
 #ifdef DEBUG
     switch(debugFlags)
@@ -149,13 +151,15 @@ void main()
         case DEBUG_SHOW_SPECULAR:
             outColor = LoSpec;
             break;
+        case DEBUG_SHOW_BURN:
+            outColor = vec3(clamp(burn, 0, 1));
         default:
             break;
     }
 #endif // DEBUG
 
     const vec3 wireframeColor = vec3(0.f);
-    if(bool(cameraData.sceneConfig & SCENE_SHOW_WIREFRAME))
+    if(bool(sceneData.sceneConfig & SCENE_SHOW_WIREFRAME))
         outColor = mix(outColor, wireframeColor, edgeFactor(fsIn.bary));
 
     outFragColor = vec4(outColor, 1.f);

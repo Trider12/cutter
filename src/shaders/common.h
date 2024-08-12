@@ -35,6 +35,7 @@
 #define DEBUG_SHOW_PREFILTERED (1u << 7)
 #define DEBUG_SHOW_DIFFUSE     (1u << 8)
 #define DEBUG_SHOW_SPECULAR    (1u << 9)
+#define DEBUG_SHOW_BURN        (1u << 10)
 
 #define MATERIAL_HAS_AO_TEX (1u << 0)
 
@@ -78,12 +79,13 @@ struct LightingData
     LightData lights[MAX_LIGHTS]; // dir lights then point lights
 };
 
-struct CameraData
+struct SceneData
 {
-    mat4 sceneMat;
     mat4 viewMat;
-    mat4 invViewMat;
     mat4 projMat;
+    mat4 invViewMat;
+    mat4 invProjMat;
+    mat4 sceneMat;
     uint32_t sceneConfig;
     uint32_t pad[3];
 };
@@ -128,7 +130,7 @@ static_assert(sizeof(MaterialData) == 16, "");
 static_assert(sizeof(TransformData) == 64, "");
 static_assert(sizeof(LightData) == 24, "");
 static_assert(sizeof(LightingData) == sizeof(LightData) * MAX_LIGHTS + 4, "");
-static_assert(sizeof(CameraData) == sizeof(float[4]) * 17, "");
+static_assert(sizeof(SceneData) == sizeof(float[4]) * (4 * 5 + 1), "");
 static_assert(sizeof(LineData) == sizeof(float[2]) * 4, "");
 static_assert(sizeof(CuttingData) == sizeof(float[4]) * 2, "");
 #endif // __cplusplus
