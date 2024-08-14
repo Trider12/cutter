@@ -4,7 +4,7 @@ layout(location = 0) out vec4 outFragColor;
 
 layout(push_constant) uniform ConstantBlock
 {
-    LineData lineData;
+    layout(offset = 16) LineData lineData;
 };
 
 float lineSdfNormalized(vec2 p, vec2 a, vec2 b, float r)

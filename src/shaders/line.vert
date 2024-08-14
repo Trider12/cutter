@@ -2,7 +2,7 @@
 
 layout(push_constant) uniform ConstantBlock
 {
-    LineData lineData;
+    layout(offset = 16) LineData lineData;
 };
 
 void main()

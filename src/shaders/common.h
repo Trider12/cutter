@@ -107,10 +107,20 @@ struct CuttingData
     float pad[2];
 };
 
+struct PushData // yes, this can be optimized
+{
+    uint32_t skyboxIndex;
+    uint32_t materialIndex;
+    uint32_t debugFlags;
+    float pad;
+    LineData lineData;
+    CuttingData cuttingData;
+};
+
 struct DrawIndirectData
 {
     // start of VkDrawIndirectCommand
-    uint32_t indexCount; // this is used as the vertexCount for vkCmdDrawIndirect. TODO: fix this
+    uint32_t indexCount; // used as vertexCount for vkCmdDrawIndirect
     uint32_t instanceCount;
     uint32_t firstVertex;
     uint32_t firstInstance;

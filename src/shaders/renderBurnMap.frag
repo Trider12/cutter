@@ -5,7 +5,7 @@ layout(location = 0) out uint outFragColor;
 
 layout(push_constant) uniform ConstantBlock
 {
-    CuttingData cuttingData;
+    layout(offset = 48) CuttingData cuttingData;
 };
 
 void main()

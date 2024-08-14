@@ -78,6 +78,7 @@ if(WIN32)
         /external:I ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
         /external:W0
         /external:templates-
+        /analyze-
     )
 
     target_link_options(cutter PRIVATE
