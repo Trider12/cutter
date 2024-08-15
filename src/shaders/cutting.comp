@@ -25,15 +25,12 @@ void main()
         vec3(trianglePositions[1].x, trianglePositions[1].y, trianglePositions[1].z),
         vec3(trianglePositions[2].x, trianglePositions[2].y, trianglePositions[2].z));
 
-    TransformData tds[3] = TransformData[](
-        transforms[trianglePositions[0].transformIndex],
-        transforms[trianglePositions[1].transformIndex],
-        transforms[trianglePositions[2].transformIndex]);
+    TransformData td = transforms[trianglePositions[0].transformIndex];
 
     vec4 worldPositions[3] = vec4[](
-        sceneData.sceneMat * tds[0].toWorldMat * vec4(localPositions[0], 1.f),
-        sceneData.sceneMat * tds[1].toWorldMat * vec4(localPositions[1], 1.f),
-        sceneData.sceneMat * tds[2].toWorldMat * vec4(localPositions[2], 1.f));
+        sceneData.sceneMat * td.toWorldMat * vec4(localPositions[0], 1.f),
+        sceneData.sceneMat * td.toWorldMat * vec4(localPositions[1], 1.f),
+        sceneData.sceneMat * td.toWorldMat * vec4(localPositions[2], 1.f));
 
     vec3 distsToPlane = vec3(dot(worldPositions[0], cuttingData.normalAndD), dot(worldPositions[1], cuttingData.normalAndD), dot(worldPositions[2], cuttingData.normalAndD));
     vec3 distsA = distsToPlane - 0.5f * cuttingData.width; // plane A: same normal, move by `0.5f * width` along it
@@ -64,10 +61,10 @@ void main()
         vec2(normalUvs[triangleIndices[2]].u, normalUvs[triangleIndices[2]].v));
 
     if(any(signsA)) // is intersecting A
-        planeCut(drawDataWriteIndex, triangleIndices, signsA, distsA, localPositions, normals, uvs, positions[0].transformIndex);
+        planeCut(drawDataWriteIndex, triangleIndices, signsA, distsA, localPositions, normals, uvs, trianglePositions[0].transformIndex);
 
     if(any(signsB)) // is intersecting B
-        planeCut(drawDataWriteIndex, triangleIndices, signsB, distsB, localPositions, normals, uvs, positions[0].transformIndex);
+        planeCut(drawDataWriteIndex, triangleIndices, signsB, distsB, localPositions, normals, uvs, trianglePositions[0].transformIndex);
 }
 
 void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], ivec3 normals[3], vec2 uvs[3], uint16_t transformIndex)
