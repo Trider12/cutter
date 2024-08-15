@@ -16,8 +16,6 @@ layout(location = 0) in FsInBlock
 
 layout(location = 0) out vec4 outFragColor;
 
-layout(set = 1, binding = 0) uniform texture2D textures[MAX_MODEL_TEXTURES];
-
 layout(push_constant) uniform ConstantBlock
 {
     uint skyboxIndex;
@@ -28,7 +26,7 @@ layout(push_constant) uniform ConstantBlock
 
 vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
 {
-    vec3 normal = texture(sampler2D(textures[normalMapIndex], linearRepeatSampler), uv).rgb;
+    vec3 normal = texture(sampler2D(materialTextures[normalMapIndex], linearRepeatSampler), uv).rgb;
     normal.xy = normal.xy * 2.f - 1.f;
     normal.z = sqrt(1.f - dot(normal.xy, normal.xy));
     normal.y = -normal.y;
@@ -83,8 +81,8 @@ void main()
     if(bool(sceneData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
         N = getNormal(N, fsIn.pos, fsIn.uv, md.normalTexIndex);
 
-    vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(textures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
-    vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(textures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f, 0.f, 0.f);
+    vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(materialTextures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
+    vec3 aoRoughMetal = isTextureValid(md.aoRoughMetalTexIndex) ? texture(sampler2D(materialTextures[md.aoRoughMetalTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f, 0.f, 0.f);
     float ao = bool(md.mask & MATERIAL_HAS_AO_TEX) ? aoRoughMetal.r : 1.f;
     float roughness = max(aoRoughMetal.g, 0.01f);
     float metallic = aoRoughMetal.b;

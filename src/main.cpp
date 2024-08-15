@@ -222,8 +222,6 @@ GpuImage depthImage;
 VkDescriptorPool descriptorPool;
 VkDescriptorSetLayout globalDescriptorSetLayout;
 VkDescriptorSet globalDescriptorSet;
-VkDescriptorSetLayout texturesDescriptorSetLayout;
-VkDescriptorSet texturesDescriptorSet;
 
 VkPipelineLayout graphicsPipelineLayout;
 VkPipelineLayout computePipelineLayout;
@@ -538,20 +536,14 @@ void initDescriptors()
         {22, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
         {23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
         {24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // burn map texture
+        {30, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT } // material textures
     };
-    VkDescriptorSetLayoutBinding texturesSetBinding { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT };
 
     VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(globalSetBindings, countOf(globalSetBindings));
     vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &globalDescriptorSetLayout));
-    setLayoutCreateInfo = initDescriptorSetLayoutCreateInfo(&texturesSetBinding, 1);
-    vkVerify(vkCreateDescriptorSetLayout(device, &setLayoutCreateInfo, nullptr, &texturesDescriptorSetLayout));
 
-    VkDescriptorSetLayout layouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
-    VkDescriptorSet sets[countOf(layouts)];
-    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, layouts, countOf(layouts));
-    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, sets));
-    globalDescriptorSet = sets[0];
-    texturesDescriptorSet = sets[1];
+    VkDescriptorSetAllocateInfo setAllocateInfo = initDescriptorSetAllocateInfo(descriptorPool, &globalDescriptorSetLayout, 1);
+    vkVerify(vkAllocateDescriptorSets(device, &setAllocateInfo, &globalDescriptorSet));
 }
 
 void terminateDescriptors()
@@ -562,15 +554,13 @@ void terminateDescriptors()
     vkDestroySampler(device, nearestRepeatSampler, nullptr);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalDescriptorSetLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, texturesDescriptorSetLayout, nullptr);
 }
 
 void initPipelines()
 {
     ZoneScoped;
     VkPushConstantRange pushRange { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData) };
-    VkDescriptorSetLayout setLayouts[] { globalDescriptorSetLayout, texturesDescriptorSetLayout };
-    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(setLayouts, countOf(setLayouts), &pushRange, 1);
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = initPipelineLayoutCreateInfo(&globalDescriptorSetLayout, 1, &pushRange, 1);
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &graphicsPipelineLayout));
 
     pushRange = { VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CuttingData) };
@@ -884,7 +874,7 @@ void loadModel(const char *sceneDirPath)
         initWriteDescriptorSetBuffer(globalDescriptorSet, 5, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 5),
         initWriteDescriptorSetBuffer(globalDescriptorSet, 6, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, bufferInfos + 6),
         initWriteDescriptorSetImage(globalDescriptorSet, 24, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &burnMapImageInfo),
-        initWriteDescriptorSetImage(texturesDescriptorSet, 0, modelTextureCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos)
+        initWriteDescriptorSetImage(globalDescriptorSet, 30, modelTextureCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos)
     };
 
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
@@ -1328,8 +1318,7 @@ void setupDrawState(const FrameData &frame)
 
     PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
     vkCmdPushConstants(frame.cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
-    VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
-    vkCmdBindDescriptorSets(frame.cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, countOf(descriptorSets), descriptorSets, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdBindDescriptorSets(frame.cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
 }
 
 void drawModel(Cmd cmd)
