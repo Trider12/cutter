@@ -111,8 +111,8 @@ struct PushData // yes, this can be optimized
 {
     uint32_t skyboxIndex;
     uint32_t materialIndex;
+    float time;
     uint32_t debugFlags;
-    float pad;
     LineData lineData;
     CuttingData cuttingData;
 };

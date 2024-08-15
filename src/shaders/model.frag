@@ -22,9 +22,8 @@ layout(push_constant) uniform ConstantBlock
 {
     uint skyboxIndex;
     uint materialIndex;
-#ifdef DEBUG
+    float time;
     uint debugFlags;
-#endif // DEBUG
 };
 
 vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
@@ -52,6 +51,23 @@ float edgeFactor(vec3 bary)
     vec3 a3 = smoothstep(vec3(0.f), fwidth(bary) * thickness, bary);
     return 1.f - min(min(a3.x, a3.y), a3.z);
 }
+
+bool isTextureValid(uint textureIndex)
+{
+    return bool(~textureIndex);
+}
+
+vec3 getBurnColor(float value)
+{
+    const vec3 colors[] = vec3[](
+        vec3(0.01, 0.02, 0.02),
+        vec3(0.86, 0.27, 0.33),  // 219,69,83
+        vec3(1.00, 0.77, 0.35),  // 255,196,88
+        vec3(1.00, 0.99, 0.74)); // 254,253,189
+    return mix4(colors, clamp(value, 0.f, 1.f));
+}
+
+const float maxBurnDuration = 5.f; // seconds
 
 void main()
 {
@@ -119,7 +135,12 @@ void main()
 
     vec3 outColor = reinhardTonemap(LoDiff + LoSpec);
 
-    uint burn = texture(usampler2D(burnMapTexture, nearestRepeatSampler), fsIn.uv).r;
+    vec2 burn = texture(sampler2D(burnMapTexture, linearRepeatSampler), fsIn.uv).rg;
+    float burnTime = burn.x;
+    float burnAlpha = burn.y;
+    float burnLevel = 1.f - smoothstep(burnTime, burnTime + maxBurnDuration * burnAlpha, time);
+    vec3 burnColor = getBurnColor(burnLevel);
+    outColor = mix(outColor, burnColor, burnAlpha);
 
 #ifdef DEBUG
     switch(debugFlags)
@@ -152,7 +173,7 @@ void main()
             outColor = LoSpec;
             break;
         case DEBUG_SHOW_BURN:
-            outColor = vec3(clamp(burn, 0, 1));
+            outColor = burnColor;
         default:
             break;
     }

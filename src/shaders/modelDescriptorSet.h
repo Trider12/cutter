@@ -60,4 +60,4 @@ layout(set = 0, binding = 20) uniform texture2D brdfLut;
 layout(set = 0, binding = 21) uniform textureCube skyboxTextures[];
 layout(set = 0, binding = 22) uniform textureCube irradianceMaps[];
 layout(set = 0, binding = 23) uniform textureCube prefilteredMaps[];
-layout(set = 0, binding = 24) uniform utexture2D burnMapTexture;
+layout(set = 0, binding = 24) uniform texture2D burnMapTexture;

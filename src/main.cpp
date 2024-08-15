@@ -23,6 +23,7 @@
 #define SKIP_ENV_MAP_REIMPORT 1
 
 GLFWwindow *window;
+float timeSinceStart = 0.f;
 
 void init();
 void update(float delta);
@@ -31,11 +32,12 @@ void exit();
 
 int main()
 {
+    init();
+
     const float defaultDelta = 1.f / 60.f;
     float delta = defaultDelta;
-    uint64_t prevTime = glfwGetTimerValue();
-
-    init();
+    uint64_t startTime = glfwGetTimerValue();
+    uint64_t prevTime = startTime;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -44,7 +46,9 @@ int main()
         draw();
 
         uint64_t currTime = glfwGetTimerValue();
-        delta = (float)(currTime - prevTime) / glfwGetTimerFrequency();
+        float period = 1.f / glfwGetTimerFrequency();
+        timeSinceStart = (currTime - startTime) * period;
+        delta = (currTime - prevTime) * period;
         if (delta > 1.f)
             delta = defaultDelta;
         prevTime = currTime;
@@ -642,7 +646,7 @@ void initPipelines()
     rasterizationState.cullMode = VK_CULL_MODE_NONE;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
     blendState.blendEnable = false;
-    VkFormat format = VK_FORMAT_R32_UINT;
+    VkFormat format = VK_FORMAT_R32G32_SFLOAT;
     renderingInfo = initPipelineRenderingCreateInfo(&format, 1);
     vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &burnMapPipeline));
     vkDestroyShaderModule(device, vertexShader, nullptr);
@@ -783,7 +787,7 @@ void loadModel(const char *sceneDirPath)
 
     if (!burnMapImage.image)
     {
-        burnMapImage = createGpuImage(VK_FORMAT_R32_UINT, { 2048, 2048 }, 1,
+        burnMapImage = createGpuImage(VK_FORMAT_R32G32_SFLOAT, { 2048, 2048 }, 1,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, GpuImageType::Image2D);
         setGpuImageName(burnMapImage, NAMEOF(burnMapImage));
     }
@@ -1322,7 +1326,7 @@ void setupDrawState(const FrameData &frame)
     memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
     memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.sceneData, sizeof(SceneData));
 
-    PushData pushData { selectedSkybox, selectedMaterial, debugFlags, 0, lineData, cuttingData };
+    PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
     vkCmdPushConstants(frame.cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
     VkDescriptorSet descriptorSets[] { globalDescriptorSet, texturesDescriptorSet };
     vkCmdBindDescriptorSets(frame.cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, countOf(descriptorSets), descriptorSets, dynamicOffsets.offsetCount, dynamicOffsets.offsets);

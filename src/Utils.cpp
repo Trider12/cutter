@@ -71,8 +71,9 @@ uint32_t readFile(const char *filename, uint8_t *buffer, uint32_t bufferSize)
         VERIFY(bufferSize >= size);
         fseek(stream, 0, SEEK_SET);
         size = (uint32_t)fread(buffer, 1, size, stream);
-        fclose(stream);
     }
+
+    fclose(stream);
 
     return size;
 }
