@@ -166,6 +166,17 @@ VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask,
     return imageSubresourceRange;
 }
 
+VkImageSubresourceLayers initImageSubresourceLayers(VkImageAspectFlags aspectMask, uint32_t mipLevel, uint32_t baseArrayLayer, uint32_t layerCount)
+{
+    VkImageSubresourceLayers imageSubresourceLayers {};
+    imageSubresourceLayers.aspectMask = aspectMask;
+    imageSubresourceLayers.mipLevel = mipLevel;
+    imageSubresourceLayers.baseArrayLayer = baseArrayLayer;
+    imageSubresourceLayers.layerCount = layerCount ? layerCount : 1;
+
+    return imageSubresourceLayers;
+}
+
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags)
 {
     return initImageViewCreateInfo(image, format, viewType, initImageSubresourceRange(aspectFlags));

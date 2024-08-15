@@ -37,6 +37,8 @@ VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32
 
 VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, uint32_t baseMipLevel = 0, uint32_t levelCount = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 0);
 
+VkImageSubresourceLayers initImageSubresourceLayers(VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, uint32_t mipLevel = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 0);
+
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageAspectFlags aspectFlags);
 
 VkImageViewCreateInfo initImageViewCreateInfo(VkImage image, VkFormat format, VkImageViewType viewType, VkImageSubresourceRange subresourceRange);

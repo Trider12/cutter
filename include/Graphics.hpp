@@ -42,7 +42,7 @@ struct GpuImage
     VkImageView imageView;
     VmaAllocation allocation;
     VkExtent3D extent;
-    VkFormat format : 32;
+    VkFormat format;
     uint8_t levelCount;
     uint8_t layerCount;
     GpuImageType type;
@@ -160,7 +160,7 @@ void beginOneTimeCmd(Cmd cmd);
 
 void endOneTimeCmd(Cmd cmd);
 
-void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, VkFence fence);
+void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo = nullptr, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo = nullptr, VkFence fence = nullptr);
 
 void endAndSubmitOneTimeCmd(Cmd cmd, VkQueue queue, const VkSemaphoreSubmitInfoKHR *waitSemaphoreSubmitInfo, const VkSemaphoreSubmitInfoKHR *signalSemaphoreSubmitInfo, WaitForFence waitForFence);
 
