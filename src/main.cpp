@@ -118,10 +118,6 @@ const struct SceneImportInfo
     {glbsPath"SciFiHelmet.glb",       scenesPath"SciFiHelmet",       1.f},
     {glbsPath"NormalTangentTest.glb", scenesPath"NormalTangentTest", 1.f}
 };
-uint8_t selectedScene = 1;
-bool sceneChangeRequired = false;
-bool shaderReloadRequired = false;
-bool lastShaderReloadSuccessful = true;
 
 const struct MaterialImportInfo
 {
@@ -170,6 +166,7 @@ const struct MaterialImportInfo
         texturesPath"copper-rock/copper-rock_ao-roughness-metallic.ktx2",
     }
 };
+
 const char *const materialNames[]
 {
     "Scene Default",
@@ -180,7 +177,6 @@ const char *const materialNames[]
     "Copper Rock"
 };
 static_assert(countOf(materialInfos) + 1 == countOf(materialNames), "");
-uint32_t selectedMaterial = 0;
 
 const char *const hdriImagePaths[]
 {
@@ -242,7 +238,6 @@ GpuImage irradianceMaps[countOf(hdriImagePaths)];
 GpuImage prefilteredMaps[countOf(hdriImagePaths)];
 GpuImage brdfLut;
 GpuImage burnMapImage;
-uint32_t selectedSkybox = 1;
 
 VkSampler linearClampSampler;
 VkSampler linearRepeatSampler;
@@ -270,15 +265,8 @@ Scene model;
 LightingData lightData;
 DrawIndirectData drawIndirectReadData;
 uint8_t drawDataReadIndex = 0; // 0 or 1
-
-bool rotateScene = false;
-float sceneRotationTime = 0.f;
-uint32_t sceneConfig = SCENE_USE_LIGHTS | SCENE_USE_IBL;
-glm::vec4 lightDirsAndIntensitiesUI[MAX_LIGHTS];
-
-glm::vec2 prevCursorPos;
-bool firstCursorUpdate = true;
-bool cursorCaptured = false;
+LineData lineData;
+CuttingData cuttingData;
 
 enum class CutState : uint8_t
 {
@@ -289,8 +277,25 @@ enum class CutState : uint8_t
 } cutState;
 
 const float defaultLineWidth = 30.f;
-LineData lineData;
-CuttingData cuttingData;
+
+uint8_t selectedScene = 1;
+uint32_t selectedMaterial = 0;
+uint32_t selectedSkybox = 1;
+
+bool rotateScene = false;
+float sceneRotationTime = 0.f;
+uint32_t sceneConfig = SCENE_USE_LIGHTS | SCENE_USE_IBL;
+glm::vec4 lightDirsAndIntensitiesUI[MAX_LIGHTS];
+
+glm::vec2 prevCursorPos;
+bool firstCursorUpdate = true;
+bool cursorCaptured = false;
+
+bool swapchainChangeRequired = false;
+bool sceneChangeRequired = false;
+bool shaderReloadRequired = false;
+bool lastShaderReloadSuccessful = true;
+bool vSyncOn = true;
 
 uint32_t debugFlags;
 
@@ -401,7 +406,7 @@ void createSwapchain(uint32_t width, uint32_t height)
 
     vkb::Swapchain vkbSwapchain = swapchainBuilder
         .set_desired_format(surfaceFormat)
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+        .set_desired_present_mode(vSyncOn ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR)
         .set_desired_extent(width, height)
         .use_default_image_usage_flags()
         .build()
@@ -1263,6 +1268,12 @@ void updateLogic(float delta)
         break;
     }
 
+    if (swapchainChangeRequired)
+    {
+        recreateRenderTargets();
+        swapchainChangeRequired = false;
+    }
+
     if (sceneChangeRequired)
     {
         vkDeviceWaitIdle(device);
@@ -1450,6 +1461,10 @@ void drawUI(Cmd cmd)
         ImGui::CheckboxFlags("##Use lights", &sceneConfig, SCENE_USE_LIGHTS);
         tableCellLabel("Use IBL");
         ImGui::CheckboxFlags("##Use IBL", &sceneConfig, SCENE_USE_IBL);
+
+        tableCellLabel("VSync");
+        if (ImGui::Checkbox("##VSync", &vSyncOn))
+            swapchainChangeRequired = true;
 
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.vertexCount, maxVertexCount);
@@ -1676,17 +1691,11 @@ void burnMapPass(Cmd cmd)
     pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 }
 
-static bool resizeRequired = false;
 static bool burnMapPassRequired = false;
 
 void draw()
 {
     ZoneScoped;
-    if (resizeRequired)
-    {
-        recreateRenderTargets();
-        resizeRequired = false;
-    }
 
     if (cutState == CutState::CuttingInProgress)
     {
@@ -1714,7 +1723,7 @@ void draw()
         VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_NONE_KHR);
         VkSubmitInfo2 submitInfo = initSubmitInfo(nullptr, &waitSemaphoreSubmitInfo, nullptr);
         vkVerify(vkQueueSubmit2KHR(graphicsQueue, 1, &submitInfo, nullptr));
-        resizeRequired = true;
+        swapchainChangeRequired = true;
         return;
     }
 
@@ -1744,7 +1753,7 @@ void draw()
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
     {
-        resizeRequired = true;
+        swapchainChangeRequired = true;
     }
     else
     {
