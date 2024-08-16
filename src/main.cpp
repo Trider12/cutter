@@ -1601,72 +1601,6 @@ void readCuttingData()
     memcpy(&drawIndirectReadData, (char *)drawIndirectBuffer.mappedData + drawIndirectDataReadOffset, sizeof(DrawIndirectData));
 }
 
-void mainDrawPass(Cmd cmd, uint32_t swapchainImageIndex)
-{
-    ZoneScoped;
-    ScopedGpuZone(cmd, "Main draw pass");
-    VkClearValue colorClearValue {}, depthClearValue {};
-    VkExtent2D extent { frameBufferImage.extent.width, frameBufferImage.extent.height };
-    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(frameBufferImage.imageView, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
-    VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
-    VkRenderingInfoKHR renderingInfo = initRenderingInfo(extent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
-
-    ImageBarrier imageBarriers[2] {};
-    imageBarriers[0].image = frameBufferImage;
-    imageBarriers[0].srcStageMask = StageFlags::Blit;
-    imageBarriers[0].dstStageMask = StageFlags::ColorAttachmentOutput;
-    imageBarriers[0].srcAccessMask = AccessFlags::Read;
-    imageBarriers[0].dstAccessMask = AccessFlags::Write;
-    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
-
-    vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
-    drawModel(cmd);
-    drawSkybox(cmd);
-    drawUI(cmd);
-    if (cutState == CutState::CutLineStarted)
-    {
-        drawLine(cmd);
-    }
-    vkCmdEndRenderingKHR(cmd.commandBuffer);
-
-    imageBarriers[0] = {};
-    imageBarriers[0].image = frameBufferImage;
-    imageBarriers[0].srcStageMask = StageFlags::ColorAttachmentOutput;
-    imageBarriers[0].dstStageMask = StageFlags::Blit;
-    imageBarriers[0].srcAccessMask = AccessFlags::Write;
-    imageBarriers[0].dstAccessMask = AccessFlags::Read;
-    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-
-    imageBarriers[1].image.image = swapchainImages[swapchainImageIndex];
-    imageBarriers[1].srcStageMask = StageFlags::Copy; // dummy stage to wait for the imageAcquiredSemaphore
-    imageBarriers[1].dstStageMask = StageFlags::Blit;
-    imageBarriers[1].srcAccessMask = AccessFlags::None;
-    imageBarriers[1].dstAccessMask = AccessFlags::Write;
-    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
-
-    VkImageBlit blitRegion {};
-    blitRegion.srcSubresource = initImageSubresourceLayers();
-    blitRegion.dstSubresource = initImageSubresourceLayers();
-    blitRegion.srcOffsets[1] = *(VkOffset3D *)&frameBufferImage.extent;
-    blitRegion.dstOffsets[1] = *(VkOffset3D *)&frameBufferImage.extent;
-    vkCmdBlitImage(cmd.commandBuffer, frameBufferImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blitRegion, VK_FILTER_NEAREST);
-
-    imageBarriers[0] = {};
-    imageBarriers[0].image.image = swapchainImages[swapchainImageIndex];
-    imageBarriers[0].srcStageMask = StageFlags::Blit;
-    imageBarriers[0].dstStageMask = StageFlags::Copy; // dummy stage to make renderFinishedSemaphore wait
-    imageBarriers[0].srcAccessMask = AccessFlags::Write;
-    imageBarriers[0].dstAccessMask = AccessFlags::None;
-    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
-}
-
 void burnMapPass(Cmd cmd)
 {
     ZoneScoped;
@@ -1720,6 +1654,76 @@ void burnMapPass(Cmd cmd)
     pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 }
 
+void mainGeometryPass(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, "Main draw pass");
+    VkClearValue colorClearValue {}, depthClearValue {};
+    VkExtent2D extent { frameBufferImage.extent.width, frameBufferImage.extent.height };
+    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(frameBufferImage.imageView, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
+    VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
+    VkRenderingInfoKHR renderingInfo = initRenderingInfo(extent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
+
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = frameBufferImage;
+    imageBarrier.srcStageMask = StageFlags::Blit;
+    imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.srcAccessMask = AccessFlags::Read;
+    imageBarrier.dstAccessMask = AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+    vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
+    drawModel(cmd);
+    drawSkybox(cmd);
+    drawUI(cmd);
+    if (cutState == CutState::CutLineStarted)
+    {
+        drawLine(cmd);
+    }
+    vkCmdEndRenderingKHR(cmd.commandBuffer);
+}
+
+void blitFramebufferToSwapchain(Cmd cmd, uint32_t swapchainImageIndex)
+{
+    ImageBarrier imageBarriers[2] {};
+    imageBarriers[0] = {};
+    imageBarriers[0].image = frameBufferImage;
+    imageBarriers[0].srcStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarriers[0].dstStageMask = StageFlags::Blit;
+    imageBarriers[0].srcAccessMask = AccessFlags::Write;
+    imageBarriers[0].dstAccessMask = AccessFlags::Read;
+    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+    imageBarriers[1].image.image = swapchainImages[swapchainImageIndex];
+    imageBarriers[1].srcStageMask = StageFlags::Copy; // dummy stage to wait for the imageAcquiredSemaphore
+    imageBarriers[1].dstStageMask = StageFlags::Blit;
+    imageBarriers[1].srcAccessMask = AccessFlags::None;
+    imageBarriers[1].dstAccessMask = AccessFlags::Write;
+    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
+
+    VkImageBlit blitRegion {};
+    blitRegion.srcSubresource = initImageSubresourceLayers();
+    blitRegion.dstSubresource = initImageSubresourceLayers();
+    blitRegion.srcOffsets[1] = *(VkOffset3D *)&frameBufferImage.extent;
+    blitRegion.dstOffsets[1] = *(VkOffset3D *)&frameBufferImage.extent;
+    vkCmdBlitImage(cmd.commandBuffer, frameBufferImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blitRegion, VK_FILTER_NEAREST);
+
+    imageBarriers[0] = {};
+    imageBarriers[0].image.image = swapchainImages[swapchainImageIndex];
+    imageBarriers[0].srcStageMask = StageFlags::Blit;
+    imageBarriers[0].dstStageMask = StageFlags::Copy; // dummy stage to make renderFinishedSemaphore wait
+    imageBarriers[0].srcAccessMask = AccessFlags::Write;
+    imageBarriers[0].dstAccessMask = AccessFlags::None;
+    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
+}
+
 static bool burnMapPassRequired = false;
 
 void draw()
@@ -1771,7 +1775,8 @@ void draw()
             burnMapPassRequired = false;
         }
 
-        mainDrawPass(frame.cmd, swapchainImageIndex);
+        mainGeometryPass(frame.cmd);
+        blitFramebufferToSwapchain(frame.cmd, swapchainImageIndex);
     }
     VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_COPY_BIT_KHR); // dummy stage
     VkSemaphoreSubmitInfoKHR signalSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.renderFinishedSemaphore, VK_PIPELINE_STAGE_2_COPY_BIT_KHR); // dummy stage
