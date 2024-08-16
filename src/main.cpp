@@ -634,8 +634,13 @@ void initPipelines()
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
     rasterizationState.cullMode = VK_CULL_MODE_NONE;
     depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
-    blendState.blendEnable = false;
-    VkFormat format = VK_FORMAT_R32G32_SFLOAT;
+    blendState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.colorBlendOp = VK_BLEND_OP_ADD;
+    blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.alphaBlendOp = VK_BLEND_OP_MAX;
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
     renderingInfo = initPipelineRenderingCreateInfo(&format, 1);
     vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &burnMapPipeline));
     vkDestroyShaderModule(device, vertexShader, nullptr);
@@ -776,7 +781,7 @@ void loadModel(const char *sceneDirPath)
 
     if (!burnMapImage.image)
     {
-        burnMapImage = createGpuImage(VK_FORMAT_R32G32_SFLOAT, { 2048, 2048 }, 1,
+        burnMapImage = createGpuImage(VK_FORMAT_R32G32B32A32_SFLOAT, { 2048, 2048 }, 1,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, GpuImageType::Image2D);
         setGpuImageName(burnMapImage, NAMEOF(burnMapImage));
     }

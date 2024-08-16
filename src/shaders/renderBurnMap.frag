@@ -2,7 +2,9 @@
 #include "utils.h"
 
 layout(location = 0) in vec3 inPos;
-layout(location = 0) out vec2 outBurn; // time and alpha
+// time as R and alpha as A. G and B are empty and waste 64 bits per texel. This is required because alpha blending expects RGBA
+// TODO: can potentially be fixed with dual source blending
+layout(location = 0) out vec4 outBurn;
 
 layout(push_constant) uniform ConstantBlock
 {
@@ -24,5 +26,5 @@ void main()
         discard;
 
     float burnAlpha = 1.f - smoothstep(base, threshold, absDistToPlane);
-    outBurn = vec2(time, burnAlpha);
+    outBurn = vec4(time, 0.f, 0.f, burnAlpha);
 }

@@ -133,9 +133,9 @@ void main()
 
     vec3 outColor = reinhardTonemap(LoDiff + LoSpec);
 
-    vec2 burn = texture(sampler2D(burnMapTexture, linearRepeatSampler), fsIn.uv).rg;
+    vec4 burn = texture(sampler2D(burnMapTexture, linearRepeatSampler), fsIn.uv);
     float burnTime = burn.x;
-    float burnAlpha = burn.y;
+    float burnAlpha = burn.a;
     float burnLevel = 1.f - smoothstep(burnTime, burnTime + maxBurnDuration * burnAlpha, time);
     vec3 burnColor = getBurnColor(burnLevel);
     outColor = mix(outColor, burnColor, burnAlpha);
