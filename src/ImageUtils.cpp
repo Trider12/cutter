@@ -675,75 +675,14 @@ uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, vo
     return dataOffset;
 }
 
-#ifdef MIPS_BLIT
-static void generateMipsBlit(Cmd cmd, GpuImage &gpuImage)
-{
-    ImageBarrier imageBarriers[2] {};
-    imageBarriers[0].image = gpuImage;
-    imageBarriers[0].srcStageMask = StageFlags::Blit;
-    imageBarriers[0].dstStageMask = StageFlags::Blit;
-    imageBarriers[0].srcAccessMask = AccessFlags::Write;
-    imageBarriers[0].dstAccessMask = AccessFlags::Read;
-    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageBarriers[0].levelCount = 1;
-    imageBarriers[0].baseArrayLayer = 0;
-    imageBarriers[0].layerCount = gpuImage.layerCount;
-
-    VkImageBlit blit {};
-    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blit.srcSubresource.baseArrayLayer = 0;
-    blit.srcSubresource.layerCount = gpuImage.layerCount;
-    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blit.dstSubresource.baseArrayLayer = 0;
-    blit.dstSubresource.layerCount = gpuImage.layerCount;
-
-    int32_t mipWidth = gpuImage.extent.width;
-    int32_t mipHeight = gpuImage.extent.height;
-
-    for (uint8_t i = 1; i < gpuImage.levelCount; i++)
-    {
-        imageBarriers[0].baseMipLevel = i - 1;
-        pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
-
-        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-        blit.srcSubresource.mipLevel = i - 1;
-
-        if (mipWidth > 1)
-            mipWidth >>= 1;
-        if (mipHeight > 1)
-            mipHeight >>= 1;
-
-        blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
-        blit.dstSubresource.mipLevel = i;
-
-        vkCmdBlitImage(cmd.commandBuffer,
-            gpuImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            gpuImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit,
-            VK_FILTER_LINEAR);
-    }
-
-    imageBarriers[0].baseMipLevel = gpuImage.levelCount - 1;
-    imageBarriers[1].image = gpuImage;
-    imageBarriers[1].srcStageMask = StageFlags::Blit;
-    imageBarriers[1].dstStageMask = StageFlags::None;
-    imageBarriers[1].srcAccessMask = AccessFlags::Write;
-    imageBarriers[1].dstAccessMask = AccessFlags::None;
-    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
-}
-#else
+#ifndef MIPS_BLIT
 static void generateMipsCompute(GpuImage &gpuImage)
 {
     static_assert(false, ""); // TODO
 }
-#endif // MIPS_BLIT
+#endif // !MIPS_BLIT
 
-static void generateImageMips(Image &image)
+void createImageMips(Image &image)
 {
     ZoneScoped;
     ASSERT(image.data && image.dataSize);
@@ -773,14 +712,11 @@ static void generateImageMips(Image &image)
     Cmd cmd = allocateCmd(queueFamily);
     beginOneTimeCmd(cmd);
 #ifdef MIPS_BLIT
-    {
-        ScopedGpuZoneAutoCollect(cmd, "Mips Blit");
-        generateMipsBlit(cmd, gpuImage);
-    }
-    endAndSubmitOneTimeCmd(cmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
+    blitGpuImageMips(cmd, gpuImage, imageLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
     generateMipsCompute(gpuImage);
 #endif
+    endAndSubmitOneTimeCmd(cmd, graphicsQueue, nullptr, nullptr, WaitForFence::Yes);
     freeCmd(cmd);
 
     copyImage(gpuImage, image, queueFamily);
@@ -795,7 +731,7 @@ void writeImage(Image &image, const char *outImageFilename, GenerateMips generat
     ASSERT(image.faceCount == 1 || image.faceCount == 6);
 
     if (generateMips == GenerateMips::Yes && image.levelCount == 1)
-        generateImageMips(image);
+        createImageMips(image);
 
     Image compressedImage = {};
 
@@ -1072,7 +1008,7 @@ void computeEnvMaps(const char *hdriPath, const char *skyboxPath, const char *ir
         imageBarriers[0].srcQueueFamily = QueueFamily::Compute;
         imageBarriers[0].dstQueueFamily = QueueFamily::Graphics;
         pipelineBarrier(graphicsCmd, nullptr, 0, imageBarriers, 1);
-        generateMipsBlit(graphicsCmd, skyboxGpuImage);
+        blitGpuImageMips(graphicsCmd, skyboxGpuImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         imageBarriers[0] = {};
         imageBarriers[0].image = skyboxGpuImage;
         imageBarriers[0].srcStageMask = StageFlags::Blit;

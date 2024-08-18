@@ -102,6 +102,8 @@ struct ShaderTable
     defineShader(computePrefilteredMap, ".comp", Compute);
     defineShader(normalizeNormalMap, ".comp", Compute);
     defineShader(cutting, ".comp", Compute);
+    defineShader(blur, ".comp", Compute);
+    defineShader(final, ".comp", Compute);
 } shaderTable;
 
 const struct SceneImportInfo
@@ -211,6 +213,8 @@ uint32_t transferQueueFamilyIndex;
 VkSwapchainKHR swapchain;
 std::vector<VkImage> swapchainImages;
 GpuImage frameBufferImage;
+std::vector<VkImageView> frameBufferMipImageViews;
+std::vector<glm::uvec2> frameBufferMipSizes;
 GpuImage depthImage;
 
 VkDescriptorPool descriptorPool;
@@ -224,6 +228,8 @@ VkPipeline skyboxPipeline;
 VkPipeline linePipeline;
 VkPipeline cuttingPipeline;
 VkPipeline burnMapPipeline;
+VkPipeline blurPipeline;
+VkPipeline finalPipeline;
 
 GpuBuffer modelBuffer;
 GpuBuffer globalUniformBuffer;
@@ -425,9 +431,28 @@ void initRenderTargets()
     ZoneScoped;
     createSwapchain(windowExtent.width, windowExtent.height);
 
-    frameBufferImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT, windowExtent, 1,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    // mip 0 for rendering, mips 1-n for bloom bluring
+    frameBufferImage = createGpuImage(VK_FORMAT_R16G16B16A16_SFLOAT, windowExtent, 6,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     setGpuImageName(frameBufferImage, NAMEOF(frameBufferImage));
+
+    frameBufferMipImageViews.resize(frameBufferImage.levelCount);
+    frameBufferMipSizes.resize(frameBufferImage.levelCount);
+    uint32_t width = windowExtent.width, height = windowExtent.height;
+
+    for (uint8_t i = 0; i < frameBufferImage.levelCount; i++)
+    {
+        VkImageSubresourceRange range = initImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, i, 1);
+        VkImageViewCreateInfo imageViewCreateInfo = initImageViewCreateInfo(frameBufferImage.image, frameBufferImage.format, VK_IMAGE_VIEW_TYPE_2D, range);
+        vkVerify(vkCreateImageView(device, &imageViewCreateInfo, nullptr, &frameBufferMipImageViews[i]));
+        frameBufferMipSizes[i] = glm::uvec2(width, height);
+
+        if (width)
+            width >>= 1;
+        if (height)
+            height >>= 1;
+    }
+
     depthImage = createGpuImage(VK_FORMAT_D32_SFLOAT, windowExtent, 1,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         GpuImageType::Image2D, SharingMode::Exclusive, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -438,7 +463,33 @@ void terminateRenderTargets()
 {
     destroySwapchain();
     destroyGpuImage(frameBufferImage);
+    for (VkImageView view : frameBufferMipImageViews)
+    {
+        vkDestroyImageView(device, view, nullptr);
+    }
+    frameBufferMipImageViews.clear();
+    frameBufferMipSizes.clear();
     destroyGpuImage(depthImage);
+}
+
+void updateRenderTargetDescriptors()
+{
+    uint32_t size = (frameBufferImage.levelCount * 2) * sizeof(VkDescriptorImageInfo);
+    VkDescriptorImageInfo *imageInfos = (VkDescriptorImageInfo *)alloca(size);
+    memset(imageInfos, 0, size);
+
+    for (uint8_t i = 0; i < frameBufferImage.levelCount; i++)
+    {
+        imageInfos[i] = { nullptr, frameBufferMipImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        imageInfos[i + frameBufferImage.levelCount] = { nullptr, frameBufferMipImageViews[i], VK_IMAGE_LAYOUT_GENERAL };
+    }
+
+    VkWriteDescriptorSet writes[]
+    {
+        initWriteDescriptorSetImage(globalDescriptorSet, 25, frameBufferImage.levelCount, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageInfos),
+        initWriteDescriptorSetImage(globalDescriptorSet, 26, frameBufferImage.levelCount, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, imageInfos + frameBufferImage.levelCount)
+    };
+    vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
 
 void recreateRenderTargets()
@@ -457,6 +508,7 @@ void recreateRenderTargets()
     vkDeviceWaitIdle(device);
     terminateRenderTargets();
     initRenderTargets();
+    updateRenderTargetDescriptors();
 }
 
 void initFrameData()
@@ -505,11 +557,13 @@ void initDescriptors()
 
     VkDescriptorPoolSize poolSizes[]
     {
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 16},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16 + MAX_MODEL_TEXTURES},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, 16},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 64},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 64},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 64},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64 + MAX_MODEL_TEXTURES},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 64},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1} // for imgui
     };
     VkDescriptorPoolCreateInfo poolCreateInfo = initDescriptorPoolCreateInfo(10, poolSizes, countOf(poolSizes), VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT /* for imgui */);
@@ -526,15 +580,17 @@ void initDescriptors()
         {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // materials
         {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // lights
         {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT}, // camera
-        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearClampSampler},
-        {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &linearRepeatSampler},
-        {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &nearestClampSampler},
-        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &nearestRepeatSampler},
+        {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, &linearClampSampler},
+        {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, &linearRepeatSampler},
+        {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, &nearestClampSampler},
+        {13, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, &nearestRepeatSampler},
         {20, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // brdf lut
         {21, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(skyboxImages), VK_SHADER_STAGE_FRAGMENT_BIT}, // skybox
         {22, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(irradianceMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // irradiance
         {23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, countOf(prefilteredMaps), VK_SHADER_STAGE_FRAGMENT_BIT}, // prefiltered
         {24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT}, // burn map texture
+        {25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, frameBufferImage.levelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // frame buffer mips
+        {26, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, frameBufferImage.levelCount, VK_SHADER_STAGE_COMPUTE_BIT}, // frame buffer mips
         {30, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_MODEL_TEXTURES, VK_SHADER_STAGE_FRAGMENT_BIT } // material textures
     };
 
@@ -563,7 +619,6 @@ void initPipelines()
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &graphicsPipelineLayout));
 
     pushRange = { VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CuttingData) };
-    pipelineLayoutCreateInfo.setLayoutCount = 1;
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
 
     // Model
@@ -652,6 +707,20 @@ void initPipelines()
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &cuttingPipeline));
     vkDestroyShaderModule(device, computeShader, nullptr);
+
+    // Blur for bloom
+    computeShader = createShaderModuleFromSpv(device, shaderTable.blurComputeShader.shaderSpvPath);
+    computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
+    computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &blurPipeline));
+    vkDestroyShaderModule(device, computeShader, nullptr);
+
+    // Final
+    computeShader = createShaderModuleFromSpv(device, shaderTable.finalComputeShader.shaderSpvPath);
+    computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
+    computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &finalPipeline));
+    vkDestroyShaderModule(device, computeShader, nullptr);
 }
 
 void terminatePipelines()
@@ -663,6 +732,8 @@ void terminatePipelines()
     vkDestroyPipeline(device, cuttingPipeline, nullptr);
     vkDestroyPipeline(device, linePipeline, nullptr);
     vkDestroyPipeline(device, burnMapPipeline, nullptr);
+    vkDestroyPipeline(device, blurPipeline, nullptr);
+    vkDestroyPipeline(device, finalPipeline, nullptr);
 }
 
 struct ImguiVulkanContext
@@ -1161,6 +1232,7 @@ void init()
         shaderTable.computePrefilteredMapComputeShader.shaderSpvPath,
         shaderTable.normalizeNormalMapComputeShader.shaderSpvPath);
 
+    updateRenderTargetDescriptors();
     initScene();
 }
 
@@ -1365,6 +1437,31 @@ void drawSkybox(Cmd cmd)
     vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
 
+void drawLine(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, "Line");
+
+    VkViewport viewport {};
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.width = (float)frameBufferImage.extent.width;
+    viewport.height = (float)frameBufferImage.extent.height;
+    viewport.minDepth = 0.f;
+    viewport.maxDepth = 1.f;
+    vkCmdSetViewport(cmd.commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor {};
+    scissor.offset.x = 0;
+    scissor.offset.y = 0;
+    scissor.extent.width = frameBufferImage.extent.width;
+    scissor.extent.height = frameBufferImage.extent.height;
+    vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
+    vkCmdDraw(cmd.commandBuffer, 6, 1, 0, 0);
+}
+
 static inline void tableCellLabel(const char *label)
 {
     ImGui::TableNextColumn();
@@ -1373,7 +1470,7 @@ static inline void tableCellLabel(const char *label)
     ImGui::TableNextColumn();
 }
 
-void drawUI(Cmd cmd)
+void drawImgui(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, "ImGui");
@@ -1561,14 +1658,6 @@ void drawUI(Cmd cmd)
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd.commandBuffer);
 }
 
-void drawLine(Cmd cmd)
-{
-    ZoneScoped;
-    ScopedGpuZone(cmd, "Line");
-    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline);
-    vkCmdDraw(cmd.commandBuffer, 6, 1, 0, 0);
-}
-
 void dispatchCutting()
 {
     ZoneScoped;
@@ -1604,7 +1693,7 @@ void readCuttingData()
 void burnMapPass(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "Burn map pass");
+    ScopedGpuZone(cmd, __FUNCTION__);
 
     VkExtent2D extent { burnMapImage.extent.width, burnMapImage.extent.height };
     VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(burnMapImage.imageView, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, nullptr);
@@ -1657,10 +1746,10 @@ void burnMapPass(Cmd cmd)
 void mainGeometryPass(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "Main draw pass");
+    ScopedGpuZone(cmd, __FUNCTION__);
     VkClearValue colorClearValue {}, depthClearValue {};
     VkExtent2D extent { frameBufferImage.extent.width, frameBufferImage.extent.height };
-    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(frameBufferImage.imageView, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
+    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(frameBufferMipImageViews[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, &colorClearValue);
     VkRenderingAttachmentInfoKHR depthAttachmentInfo = initRenderingAttachmentInfo(depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, &depthClearValue);
     VkRenderingInfoKHR renderingInfo = initRenderingInfo(extent, &colorAttachmentInfo, 1, &depthAttachmentInfo);
 
@@ -1668,37 +1757,125 @@ void mainGeometryPass(Cmd cmd)
     imageBarrier.image = frameBufferImage;
     imageBarrier.srcStageMask = StageFlags::Blit;
     imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput;
-    imageBarrier.srcAccessMask = AccessFlags::Read;
+    imageBarrier.srcAccessMask = AccessFlags::Read | AccessFlags::Write;
     imageBarrier.dstAccessMask = AccessFlags::Write;
     imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrier.baseMipLevel = 0;
+    imageBarrier.levelCount = 1;
     pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
 
     vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
     drawModel(cmd);
     drawSkybox(cmd);
-    drawUI(cmd);
+    vkCmdEndRenderingKHR(cmd.commandBuffer);
+}
+
+void bloomPass(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
+
+    blitGpuImageMips(cmd, frameBufferImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, StageFlags::ColorAttachmentOutput, StageFlags::ComputeShader);
+
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blurPipeline);
+
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = frameBufferImage;
+    imageBarrier.srcStageMask = StageFlags::ComputeShader;
+    imageBarrier.dstStageMask = StageFlags::ComputeShader;
+    imageBarrier.srcAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::Read;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // not performing this transition causes very weird behaviour on my GPU. Might be a driver bug.
+    imageBarrier.levelCount = 1;
+
+    for (uint32_t i = frameBufferImage.levelCount - 1; i > 1; i--)
+    {
+        imageBarrier.baseMipLevel = i;
+        pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+        uint32_t countX = (frameBufferMipSizes[i - 1].x + 15) / 16;
+        uint32_t countY = (frameBufferMipSizes[i - 1].y + 15) / 16;
+        vkCmdPushConstants(cmd.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &i);
+        vkCmdDispatch(cmd.commandBuffer, countX, countY, 1);
+    }
+}
+
+void finalPass(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
+
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = frameBufferImage;
+    imageBarrier.srcStageMask = StageFlags::ComputeShader;
+    imageBarrier.dstStageMask = StageFlags::ComputeShader;
+    imageBarrier.srcAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::Read;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageBarrier.baseMipLevel = 1;
+    imageBarrier.levelCount = 1;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finalPipeline);
+
+    uint32_t countX = (frameBufferMipSizes[0].x + 15) / 16;
+    uint32_t countY = (frameBufferMipSizes[0].y + 15) / 16;
+    vkCmdDispatch(cmd.commandBuffer, countX, countY, 1);
+}
+
+void uiPass(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
+    ImageBarrier imageBarrier {};
+    imageBarrier.image = frameBufferImage;
+    imageBarrier.srcStageMask = StageFlags::ComputeShader;
+    imageBarrier.dstStageMask = StageFlags::ColorAttachmentOutput;
+    imageBarrier.srcAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarrier.dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrier.baseMipLevel = 0;
+    imageBarrier.levelCount = 1;
+    pipelineBarrier(cmd, nullptr, 0, &imageBarrier, 1);
+
+    VkExtent2D extent { frameBufferImage.extent.width, frameBufferImage.extent.height };
+    VkRenderingAttachmentInfoKHR colorAttachmentInfo = initRenderingAttachmentInfo(frameBufferMipImageViews[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, nullptr);
+    VkRenderingInfoKHR renderingInfo = initRenderingInfo(extent, &colorAttachmentInfo, 1, nullptr);
+
+    vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
+
     if (cutState == CutState::CutLineStarted)
     {
         drawLine(cmd);
     }
+
+    drawImgui(cmd);
+
     vkCmdEndRenderingKHR(cmd.commandBuffer);
 }
 
 void blitFramebufferToSwapchain(Cmd cmd, uint32_t swapchainImageIndex)
 {
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
     ImageBarrier imageBarriers[2] {};
-    imageBarriers[0] = {};
     imageBarriers[0].image = frameBufferImage;
     imageBarriers[0].srcStageMask = StageFlags::ColorAttachmentOutput;
     imageBarriers[0].dstStageMask = StageFlags::Blit;
-    imageBarriers[0].srcAccessMask = AccessFlags::Write;
+    imageBarriers[0].srcAccessMask = AccessFlags::Read | AccessFlags::Write;
     imageBarriers[0].dstAccessMask = AccessFlags::Read;
     imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    imageBarriers[0].baseMipLevel = 0;
+    imageBarriers[0].levelCount = 1;
 
     imageBarriers[1].image.image = swapchainImages[swapchainImageIndex];
-    imageBarriers[1].srcStageMask = StageFlags::Copy; // dummy stage to wait for the imageAcquiredSemaphore
+    imageBarriers[1].srcStageMask = StageFlags::Clear; // dummy stage to wait for the imageAcquiredSemaphore
     imageBarriers[1].dstStageMask = StageFlags::Blit;
     imageBarriers[1].srcAccessMask = AccessFlags::None;
     imageBarriers[1].dstAccessMask = AccessFlags::Write;
@@ -1716,7 +1893,7 @@ void blitFramebufferToSwapchain(Cmd cmd, uint32_t swapchainImageIndex)
     imageBarriers[0] = {};
     imageBarriers[0].image.image = swapchainImages[swapchainImageIndex];
     imageBarriers[0].srcStageMask = StageFlags::Blit;
-    imageBarriers[0].dstStageMask = StageFlags::Copy; // dummy stage to make renderFinishedSemaphore wait
+    imageBarriers[0].dstStageMask = StageFlags::Clear; // dummy stage to make renderFinishedSemaphore wait
     imageBarriers[0].srcAccessMask = AccessFlags::Write;
     imageBarriers[0].dstAccessMask = AccessFlags::None;
     imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -1776,10 +1953,13 @@ void draw()
         }
 
         mainGeometryPass(frame.cmd);
+        bloomPass(frame.cmd);
+        finalPass(frame.cmd);
+        uiPass(frame.cmd);
         blitFramebufferToSwapchain(frame.cmd, swapchainImageIndex);
     }
-    VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_COPY_BIT_KHR); // dummy stage
-    VkSemaphoreSubmitInfoKHR signalSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.renderFinishedSemaphore, VK_PIPELINE_STAGE_2_COPY_BIT_KHR); // dummy stage
+    VkSemaphoreSubmitInfoKHR waitSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.imageAcquiredSemaphore, VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR); // dummy stage
+    VkSemaphoreSubmitInfoKHR signalSemaphoreSubmitInfo = initSemaphoreSubmitInfo(frame.renderFinishedSemaphore, VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR); // dummy stage
     endAndSubmitOneTimeCmd(frame.cmd, graphicsQueue, &waitSemaphoreSubmitInfo, &signalSemaphoreSubmitInfo, frame.renderFinishedFence);
 
     VkPresentInfoKHR presentInfo = initPresentInfo(&swapchain, &frame.renderFinishedSemaphore, &swapchainImageIndex);

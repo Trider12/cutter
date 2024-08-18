@@ -47,6 +47,8 @@ Image loadImage(const char *inImageFilename);
 
 void destroyImage(Image &image);
 
+void createImageMips(Image &image);
+
 typedef void (*IterateCallback)(const Image &image, uint8_t level, uint8_t face, uint16_t mipWidth, uint16_t mipHeight, uint32_t dataOffset, uint32_t dataSize, void *userData);
 
 uint32_t iterateImageLevelFaces(const Image &image, IterateCallback callback, void *userData);

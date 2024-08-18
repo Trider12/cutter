@@ -21,6 +21,30 @@ enum class QueueFamily : uint8_t
     Transfer
 };
 
+enum class StageFlags : uint16_t
+{
+    None = 0,
+    VertexInput = 1 << 0,
+    VertexShader = 1 << 1,
+    FragmentShader = 1 << 2,
+    ComputeShader = 1 << 3,
+    ColorAttachmentOutput = 1 << 4,
+    Clear = 1 << 5,
+    Copy = 1 << 6,
+    Blit = 1 << 7,
+    Resolve = 1 << 8,
+    All = 1 << 15
+};
+defineEnumOperators(StageFlags, uint16_t);
+
+enum class AccessFlags : uint8_t
+{
+    None = 0,
+    Read = 1 << 0,
+    Write = 1 << 1
+};
+defineEnumOperators(AccessFlags, uint8_t);
+
 struct GpuBuffer
 {
     VkBuffer buffer;
@@ -65,6 +89,8 @@ GpuBuffer createGpuBuffer(uint32_t size,
     VkMemoryPropertyFlags propertyFlags,
     VmaAllocationCreateFlags createFlags);
 
+void destroyGpuBuffer(GpuBuffer &buffer);
+
 GpuImage createGpuImage(VkFormat format,
     VkExtent2D extent,
     uint8_t mipLevels,
@@ -72,10 +98,6 @@ GpuImage createGpuImage(VkFormat format,
     GpuImageType type = GpuImageType::Image2D,
     SharingMode sharingMode = SharingMode::Exclusive,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
-
-void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily, VkImageLayout srcLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
 GpuImage createAndCopyGpuImage(const Image &image,
     QueueFamily dstQueueFamily,
@@ -85,34 +107,14 @@ GpuImage createAndCopyGpuImage(const Image &image,
     VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
 
-void destroyGpuBuffer(GpuBuffer &buffer);
-
 void destroyGpuImage(GpuImage &image);
 
-enum class StageFlags : uint16_t
-{
-    None = 0,
-    VertexInput = 1 << 0,
-    VertexShader = 1 << 1,
-    FragmentShader = 1 << 2,
-    ComputeShader = 1 << 3,
-    ColorAttachmentOutput = 1 << 4,
-    Clear = 1 << 5,
-    Copy = 1 << 6,
-    Blit = 1 << 7,
-    Resolve = 1 << 8
-};
-defineEnumOperators(StageFlags, uint16_t);
+void copyImage(const Image &srcImage, GpuImage &dstImage, QueueFamily dstQueueFamily, VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-enum class AccessFlags : uint8_t
-{
-    None = 0,
-    Read = 1 << 0,
-    Write = 1 << 1
-};
-defineEnumOperators(AccessFlags, uint8_t);
+void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFamily, VkImageLayout srcLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
-EnumBool(WaitForFence);
+void blitGpuImageMips(Cmd cmd, GpuImage &gpuImage, VkImageLayout oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    VkImageLayout newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, StageFlags srcStage = StageFlags::None, StageFlags dstStage = StageFlags::None);
 
 struct BufferBarrier
 {
@@ -155,6 +157,8 @@ void pipelineBarrier(VkCommandBuffer cmd,
     ImageBarrier *imageBarriers,
     uint32_t imageBarrierCount,
     bool byRegion = false);
+
+EnumBool(WaitForFence);
 
 void beginOneTimeCmd(Cmd cmd);
 

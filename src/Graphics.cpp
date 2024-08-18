@@ -267,6 +267,102 @@ GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, V
     return gpuImage;
 }
 
+void blitGpuImageMips(Cmd cmd, GpuImage &gpuImage, VkImageLayout oldLayout, VkImageLayout newLayout, StageFlags srcStage, StageFlags dstStage)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
+    ASSERT(gpuImage.levelCount > 1);
+    ImageBarrier imageBarriers[2] {};
+    imageBarriers[0].image = gpuImage;
+    imageBarriers[0].srcStageMask = srcStage;
+    imageBarriers[0].dstStageMask = StageFlags::Blit;
+    imageBarriers[0].srcAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarriers[0].dstAccessMask = AccessFlags::Read;
+    imageBarriers[0].oldLayout = oldLayout;
+    imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    imageBarriers[0].baseMipLevel = 0;
+    imageBarriers[0].levelCount = 1;
+
+    imageBarriers[1].image = gpuImage;
+    imageBarriers[1].srcStageMask = srcStage;
+    imageBarriers[1].dstStageMask = StageFlags::Blit;
+    imageBarriers[1].srcAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarriers[1].dstAccessMask = AccessFlags::Write;
+    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    imageBarriers[1].baseMipLevel = 1;
+    imageBarriers[1].levelCount = gpuImage.levelCount - 1;
+    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
+
+    VkImageBlit blit {};
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.baseArrayLayer = 0;
+    blit.srcSubresource.layerCount = gpuImage.layerCount;
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.baseArrayLayer = 0;
+    blit.dstSubresource.layerCount = gpuImage.layerCount;
+
+    int32_t mipWidth = gpuImage.extent.width;
+    int32_t mipHeight = gpuImage.extent.height;
+
+    for (uint8_t i = 1; i < gpuImage.levelCount; i++)
+    {
+        imageBarriers[0].image = gpuImage;
+        imageBarriers[0].srcStageMask = StageFlags::Blit;
+        imageBarriers[0].dstStageMask = StageFlags::Blit;
+        imageBarriers[0].srcAccessMask = AccessFlags::Write;
+        imageBarriers[0].dstAccessMask = AccessFlags::Read;
+        imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        imageBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        imageBarriers[0].baseMipLevel = i - 1;
+        imageBarriers[0].levelCount = 1;
+
+        if (i != 1)
+            pipelineBarrier(cmd, nullptr, 0, imageBarriers, 1);
+
+        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.srcSubresource.mipLevel = i - 1;
+
+        if (mipWidth > 1)
+            mipWidth >>= 1;
+        if (mipHeight > 1)
+            mipHeight >>= 1;
+
+        blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.dstSubresource.mipLevel = i;
+
+        vkCmdBlitImage(cmd.commandBuffer,
+            gpuImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            gpuImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit,
+            VK_FILTER_LINEAR);
+    }
+
+    imageBarriers[0].image = gpuImage;
+    imageBarriers[0].srcStageMask = StageFlags::Blit;
+    imageBarriers[0].dstStageMask = dstStage;
+    imageBarriers[0].srcAccessMask = AccessFlags::Write;
+    imageBarriers[0].dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    imageBarriers[0].newLayout = newLayout;
+    imageBarriers[0].baseMipLevel = gpuImage.levelCount - 1;
+    imageBarriers[0].levelCount = 1;
+
+    imageBarriers[1].image = gpuImage;
+    imageBarriers[1].srcStageMask = StageFlags::Blit;
+    imageBarriers[1].dstStageMask = dstStage;
+    imageBarriers[1].srcAccessMask = AccessFlags::Read;
+    imageBarriers[1].dstAccessMask = AccessFlags::Read | AccessFlags::Write;
+    imageBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    imageBarriers[1].newLayout = newLayout;
+    imageBarriers[1].baseMipLevel = 0;
+    imageBarriers[1].levelCount = gpuImage.levelCount - 1;
+
+    pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
+}
+
 void destroyGpuBuffer(GpuBuffer &buffer)
 {
     vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
@@ -300,7 +396,8 @@ static VkPipelineStageFlags2KHR getVkStageFlags2(StageFlags flags)
         (value & StageFlags::Clear ? VK_PIPELINE_STAGE_2_CLEAR_BIT_KHR : 0) |
         (value & StageFlags::Copy ? VK_PIPELINE_STAGE_2_COPY_BIT_KHR : 0) |
         (value & StageFlags::Blit ? VK_PIPELINE_STAGE_2_BLIT_BIT_KHR : 0) |
-        (value & StageFlags::Resolve ? VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR : 0);
+        (value & StageFlags::Resolve ? VK_PIPELINE_STAGE_2_RESOLVE_BIT_KHR : 0) |
+        (value & StageFlags::All ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR : 0);
 }
 
 static uint32_t getFamilyIndex(QueueFamily type)

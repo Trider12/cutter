@@ -58,11 +58,12 @@ bool isTextureValid(uint textureIndex)
 vec3 getBurnColor(float value)
 {
     const vec3 colors[] = vec3[](
-        vec3(0.01, 0.02, 0.02),
+        vec3(0.02, 0.02, 0.02),
         vec3(0.86, 0.27, 0.33),  // 219,69,83
         vec3(1.00, 0.77, 0.35),  // 255,196,88
         vec3(1.00, 0.99, 0.74)); // 254,253,189
-    return mix4(colors, clamp(value, 0.f, 1.f));
+    vec3 color = mix4(colors, clamp(value, 0.f, 1.f));
+    return color * pow(10.f, luminance(color));
 }
 
 const float maxBurnDuration = 5.f; // seconds
@@ -131,7 +132,7 @@ void main()
         LoSpec += fSpec * ao;
     }
 
-    vec3 outColor = reinhardTonemap(LoDiff + LoSpec);
+    vec3 outColor = LoDiff + LoSpec;
 
     vec4 burn = texture(sampler2D(burnMapTexture, linearRepeatSampler), fsIn.uv);
     float burnTime = burn.x;

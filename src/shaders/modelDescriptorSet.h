@@ -61,5 +61,7 @@ layout(set = 0, binding = 21) uniform textureCube skyboxTextures[];
 layout(set = 0, binding = 22) uniform textureCube irradianceMaps[];
 layout(set = 0, binding = 23) uniform textureCube prefilteredMaps[];
 layout(set = 0, binding = 24) uniform texture2D burnMapTexture;
+layout(set = 0, binding = 25) uniform texture2D framebufferTextureMips[];
+layout(set = 0, binding = 26, rgba16f) uniform image2D framebufferImageMips[];
 
 layout(set = 0, binding = 30) uniform texture2D materialTextures[MAX_MODEL_TEXTURES];

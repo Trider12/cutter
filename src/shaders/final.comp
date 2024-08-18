@@ -1,0 +1,22 @@
+#include "modelDescriptorSet.h"
+#include "utils.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+float bloomStrength = 0.04f;
+
+void main()
+{
+    // mip 1 is the bloom texture, mip 0 is the render target
+    // add bloom based on bloom strength and tonemap
+    ivec2 imgSize = imageSize(framebufferImageMips[0]);
+    ivec2 imgCoords = ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(imgCoords, imgSize)))
+        return;
+
+    vec2 texCoords = (imgCoords + 0.5f) / imgSize;
+    vec3 bloomValue = texture(sampler2D(framebufferTextureMips[1], linearClampSampler), texCoords).rgb;
+    vec3 colorValue = imageLoad(framebufferImageMips[0], imgCoords).rgb;
+    vec3 finalValue = reinhardTonemap(mix(colorValue, bloomValue, bloomStrength));
+    imageStore(framebufferImageMips[0], imgCoords, vec4(finalValue, 1.f));
+}

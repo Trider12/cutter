@@ -17,7 +17,7 @@ float distributionGGX(float NdotH, float roughness)
 {
     float a2 = roughness * roughness * roughness * roughness;
     float k = 1.f + NdotH * NdotH * (a2 - 1.f);
-    return a2 / (PI * k * k);
+    return a2 / max(PI * k * k, EPSILON);
 }
 
 float geometrySchlickKarisGGX(float NdotS, float roughness)

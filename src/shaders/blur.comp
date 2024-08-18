@@ -1,0 +1,43 @@
+#include "modelDescriptorSet.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant) uniform ConstantBlock
+{
+    uint srcMipLevel; // must be > 0
+};
+
+void main()
+{
+    // upsample and blur a lower res mip to a higher res mip. Higher res == lower index
+    uint dstMipLevel = srcMipLevel - 1;
+    ivec2 imgSize = imageSize(framebufferImageMips[dstMipLevel]);
+    ivec2 imgCoords = ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(imgCoords, imgSize)))
+        return;
+
+    vec2 texelSize = 1.f / imgSize;
+    vec2 texCoords = (imgCoords + 0.5f) * texelSize;
+    float x = texelSize.x;
+    float y = texelSize.y;
+
+    // take 9 samples around the current texel
+    // a - b - c
+    // d - e - f
+    // g - h - i
+    // 'e' is the current texel
+    vec3 a = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x - x, texCoords.y + y)).rgb;
+    vec3 b = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x,     texCoords.y + y)).rgb;
+    vec3 c = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x + x, texCoords.y + y)).rgb;
+    vec3 d = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x - x, texCoords.y    )).rgb;
+    vec3 e = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x,     texCoords.y    )).rgb;
+    vec3 f = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x + x, texCoords.y    )).rgb;
+    vec3 g = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x - x, texCoords.y - y)).rgb;
+    vec3 h = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x,     texCoords.y - y)).rgb;
+    vec3 i = texture(sampler2D(framebufferTextureMips[srcMipLevel], linearClampSampler), vec2(texCoords.x + x, texCoords.y - y)).rgb;
+
+    // Gaussian blur 3x3
+    vec3 srcValue = e * 0.25f + (b + d + f + h) * 0.125f + (a + c + g + i) * 0.0625f;
+    vec3 dstValue = imageLoad(framebufferImageMips[dstMipLevel], imgCoords).rgb;
+    imageStore(framebufferImageMips[dstMipLevel], imgCoords, vec4(dstValue + srcValue, 1.f));
+}
