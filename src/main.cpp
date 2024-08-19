@@ -88,12 +88,12 @@ struct ShaderCompileInfo
 
 struct ShaderTable
 {
-    defineShader(model, ".vert", Vertex);
-    defineShader(model, ".frag", Fragment);
-    defineShader(drawSkybox, ".vert", Vertex);
-    defineShader(drawSkybox, ".frag", Fragment);
-    defineShader(line, ".vert", Vertex);
-    defineShader(line, ".frag", Fragment);
+    defineShader(renderModel, ".vert", Vertex);
+    defineShader(renderModel, ".frag", Fragment);
+    defineShader(renderSkybox, ".vert", Vertex);
+    defineShader(renderSkybox, ".frag", Fragment);
+    defineShader(renderCutLine, ".vert", Vertex);
+    defineShader(renderCutLine, ".frag", Fragment);
     defineShader(renderBurnMap, ".vert", Vertex);
     defineShader(renderBurnMap, ".frag", Fragment);
     defineShader(computeSkybox, ".comp", Compute);
@@ -101,9 +101,9 @@ struct ShaderTable
     defineShader(computeIrradianceMap, ".comp", Compute);
     defineShader(computePrefilteredMap, ".comp", Compute);
     defineShader(normalizeNormalMap, ".comp", Compute);
-    defineShader(cutting, ".comp", Compute);
-    defineShader(blur, ".comp", Compute);
-    defineShader(final, ".comp", Compute);
+    defineShader(computePlaneCut, ".comp", Compute);
+    defineShader(computeBlur2D, ".comp", Compute);
+    defineShader(computeBloomAndTonemap, ".comp", Compute);
 } shaderTable;
 
 const struct SceneImportInfo
@@ -231,7 +231,7 @@ VkPipeline linePipeline;
 VkPipeline cuttingPipeline;
 VkPipeline burnMapPipeline;
 VkPipeline blurPipeline;
-VkPipeline finalPipeline;
+VkPipeline bloomAndTonemapPipeline;
 
 GpuBuffer modelBuffer;
 GpuBuffer globalUniformBuffer;
@@ -656,8 +656,8 @@ void initPipelines()
     // Model
     VkPipelineColorBlendAttachmentState blendState {};
     blendState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    VkShaderModule vertexShader = createShaderModuleFromSpv(device, shaderTable.modelVertexShader.shaderSpvPath);
-    VkShaderModule fragmentShader = createShaderModuleFromSpv(device, shaderTable.modelFragmentShader.shaderSpvPath);
+    VkShaderModule vertexShader = createShaderModuleFromSpv(device, shaderTable.renderModelVertexShader.shaderSpvPath);
+    VkShaderModule fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderModelFragmentShader.shaderSpvPath);
     VkPipelineShaderStageCreateInfo stages[2];
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
@@ -687,8 +687,8 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Skybox
-    vertexShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxVertexShader.shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderTable.drawSkyboxFragmentShader.shaderSpvPath);
+    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderSkyboxVertexShader.shaderSpvPath);
+    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderSkyboxFragmentShader.shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
     rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
@@ -698,8 +698,8 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Line
-    vertexShader = createShaderModuleFromSpv(device, shaderTable.lineVertexShader.shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderTable.lineFragmentShader.shaderSpvPath);
+    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderCutLineVertexShader.shaderSpvPath);
+    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderCutLineFragmentShader.shaderSpvPath);
     stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
     stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
     depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
@@ -735,26 +735,26 @@ void initPipelines()
     vkDestroyShaderModule(device, fragmentShader, nullptr);
 
     // Cutting
-    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.cuttingComputeShader.shaderSpvPath);
+    VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.computePlaneCutComputeShader.shaderSpvPath);
     VkPipelineShaderStageCreateInfo computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
     VkComputePipelineCreateInfo computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &cuttingPipeline));
     vkDestroyShaderModule(device, computeShader, nullptr);
 
     // Blur for bloom
-    computeShader = createShaderModuleFromSpv(device, shaderTable.blurComputeShader.shaderSpvPath);
+    computeShader = createShaderModuleFromSpv(device, shaderTable.computeBlur2DComputeShader.shaderSpvPath);
     computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader);
     computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
     vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &blurPipeline));
     vkDestroyShaderModule(device, computeShader, nullptr);
 
-    // Final
+    // Bloom and tonemap
     VkSpecializationMapEntry entry { 0, 0, sizeof(uint32_t) };
     VkSpecializationInfo specInfo { 1, &entry, sizeof(uint32_t), &msaaSampleCount };
-    computeShader = createShaderModuleFromSpv(device, shaderTable.finalComputeShader.shaderSpvPath);
+    computeShader = createShaderModuleFromSpv(device, shaderTable.computeBloomAndTonemapComputeShader.shaderSpvPath);
     computeShaderStageCreateInfo = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, computeShader, &specInfo);
     computePipelineCreateInfo = initComputePipelineCreateInfo(computeShaderStageCreateInfo, computePipelineLayout);
-    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &finalPipeline));
+    vkVerify(vkCreateComputePipelines(device, nullptr, 1, &computePipelineCreateInfo, nullptr, &bloomAndTonemapPipeline));
     vkDestroyShaderModule(device, computeShader, nullptr);
 }
 
@@ -768,7 +768,7 @@ void terminatePipelines()
     vkDestroyPipeline(device, linePipeline, nullptr);
     vkDestroyPipeline(device, burnMapPipeline, nullptr);
     vkDestroyPipeline(device, blurPipeline, nullptr);
-    vkDestroyPipeline(device, finalPipeline, nullptr);
+    vkDestroyPipeline(device, bloomAndTonemapPipeline, nullptr);
 }
 
 struct ImguiVulkanContext
@@ -1432,7 +1432,7 @@ static struct DynamicOffsets
     uint32_t offsetCount;
 } dynamicOffsets;
 
-void setupDrawState(const FrameData &frame)
+void updateUniforms(const FrameData &frame)
 {
     uint32_t uboAlignment = (uint32_t)physicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
     uint32_t sboAlignment = (uint32_t)physicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
@@ -1449,10 +1449,6 @@ void setupDrawState(const FrameData &frame)
 
     memcpy(globalUniformBuffer.mappedData, &lightData, sizeof(LightingData));
     memcpy((char *)globalUniformBuffer.mappedData + cameraDataStaticOffset + cameraDataDynamicOffset, &frame.sceneData, sizeof(SceneData));
-
-    PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
-    vkCmdPushConstants(frame.cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
-    vkCmdBindDescriptorSets(frame.cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
 }
 
 void drawModel(Cmd cmd)
@@ -1785,6 +1781,10 @@ void burnMapPass(Cmd cmd)
 
     vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
 
+    PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
+    vkCmdPushConstants(cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+
     VkViewport viewport {};
     viewport.x = 0;
     viewport.y = (float)burnMapImage.extent.height;
@@ -1849,12 +1849,16 @@ void mainGeometryPass(Cmd cmd)
     pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
 
     vkCmdBeginRenderingKHR(cmd.commandBuffer, &renderingInfo);
+    PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
+    vkCmdPushConstants(cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
+    vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+
     drawModel(cmd);
     drawSkybox(cmd);
     vkCmdEndRenderingKHR(cmd.commandBuffer);
 }
 
-void bloomPass(Cmd cmd)
+void progressiveBlurPass(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, __FUNCTION__);
@@ -1885,7 +1889,7 @@ void bloomPass(Cmd cmd)
     }
 }
 
-void finalPass(Cmd cmd)
+void bloomAndTonemapPass(Cmd cmd)
 {
     ZoneScoped;
     ScopedGpuZone(cmd, __FUNCTION__);
@@ -1911,7 +1915,7 @@ void finalPass(Cmd cmd)
     imageBarriers[1].levelCount = 1;
     pipelineBarrier(cmd, nullptr, 0, imageBarriers, 2);
 
-    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finalPipeline);
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, bloomAndTonemapPipeline);
     vkCmdPushConstants(cmd.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(float), &bloomStrength);
     uint32_t countX = (bloomImageMipSizes[0].x + 15) / 16;
     uint32_t countY = (bloomImageMipSizes[0].y + 15) / 16;
@@ -2015,14 +2019,17 @@ void draw()
             cutState = CutState::None;
         }
     }
-    else if (cutState == CutState::CutLineFinished)
+
+    FrameData &frame = frames[frameIndex];
+    updateUniforms(frame);
+
+    if (cutState == CutState::CutLineFinished)
     {
         dispatchCutting();
         cutState = CutState::CuttingInProgress;
         burnMapPassRequired = true;
     }
 
-    FrameData &frame = frames[frameIndex];
     vkVerify(vkWaitForFences(device, 1, &frame.renderFinishedFence, true, UINT64_MAX));
     uint32_t swapchainImageIndex;
     VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
@@ -2044,7 +2051,6 @@ void draw()
     beginOneTimeCmd(frame.cmd);
     {
         ScopedGpuZoneAutoCollect(frame.cmd, "Draw");
-        setupDrawState(frame);
 
         if (burnMapPassRequired)
         {
@@ -2053,8 +2059,8 @@ void draw()
         }
 
         mainGeometryPass(frame.cmd);
-        bloomPass(frame.cmd);
-        finalPass(frame.cmd);
+        progressiveBlurPass(frame.cmd);
+        bloomAndTonemapPass(frame.cmd);
         uiPass(frame.cmd);
         blitResolveToSwapchain(frame.cmd, swapchainImageIndex);
     }

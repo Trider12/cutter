@@ -18,7 +18,6 @@ target_sources(cutter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ShaderUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/VkUtils.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/cwalk/src/cwalk.c
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/imgui/imgui.cpp

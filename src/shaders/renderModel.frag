@@ -1,4 +1,4 @@
-#include "modelDescriptorSet.h"
+#include "globalDescriptorSet.h"
 #include "pbr.h"
 
 struct VsOut
@@ -63,7 +63,7 @@ vec3 getBurnColor(float value)
         vec3(1.00, 0.77, 0.35),  // 255,196,88
         vec3(1.00, 0.99, 0.74)); // 254,253,189
     vec3 color = mix4(colors, clamp(value, 0.f, 1.f));
-    return color * pow(10.f, luminance(color));
+    return color * smoothstep(0.f, 1.f, luminance(color)) * 15.f; // 15 here is rather arbitrary
 }
 
 const float maxBurnDuration = 5.f; // seconds

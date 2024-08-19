@@ -1,4 +1,4 @@
-#include "modelDescriptorSet.h"
+#include "globalDescriptorSet.h"
 
 layout(location = 0) out vec3 outPos;
 

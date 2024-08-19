@@ -1,9 +1,9 @@
-#include "modelDescriptorSet.h"
+#include "globalDescriptorSet.h"
 #include "utils.h"
 
 layout(location = 0) in vec3 inPos;
 // time as R and alpha as A. G and B are empty and waste 64 bits per texel. This is required because alpha blending expects RGBA
-// TODO: can potentially be fixed with dual source blending
+// TODO: can probably be fixed with dual source blending
 layout(location = 0) out vec4 outBurn;
 
 layout(push_constant) uniform ConstantBlock

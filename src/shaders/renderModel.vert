@@ -1,4 +1,4 @@
-#include "modelDescriptorSet.h"
+#include "globalDescriptorSet.h"
 #include "utils.h"
 
 struct VsOut

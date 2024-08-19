@@ -1,4 +1,4 @@
-#include "modelDescriptorSet.h"
+#include "globalDescriptorSet.h"
 #include "utils.h"
 
 layout (local_size_x = 256) in;
