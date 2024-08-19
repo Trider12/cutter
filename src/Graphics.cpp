@@ -149,7 +149,7 @@ GpuBuffer createGpuBuffer(uint32_t size,
     return buffer;
 }
 
-GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, GpuImageType type, SharingMode sharingMode, VkImageAspectFlags aspectFlags)
+GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, VkImageUsageFlags usageFlags, GpuImageType type, VkImageAspectFlags aspectFlags, uint32_t sampleCount)
 {
     VkExtent3D imageExtent = { extent.width, extent.height, 1 };
     GpuImage image;
@@ -159,10 +159,7 @@ GpuImage createGpuImage(VkFormat format, VkExtent2D extent, uint8_t mipLevels, V
     image.layerCount = 1;
     image.type = type;
 
-    uint32_t queueFamilyIndices[] { graphicsQueueFamilyIndex, computeQueueFamilyIndex, transferQueueFamilyIndex };
-
-    VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 1, usageFlags,
-        queueFamilyIndices, sharingMode == SharingMode::Exclusive ? 0 : countOf(queueFamilyIndices));
+    VkImageCreateInfo imageCreateInfo = initImageCreateInfo(format, imageExtent, mipLevels, 1, usageFlags, sampleCount, nullptr, 0);
     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
 
     switch (type)
@@ -259,10 +256,10 @@ void copyImage(const GpuImage &srcImage, Image &dstImage, QueueFamily srcQueueFa
     memcpy(dstImage.data, stagingBuffer.mappedData, dstImage.dataSize);
 }
 
-GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, GpuImageType type, SharingMode sharingMode, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags)
+GpuImage createAndCopyGpuImage(const Image &image, QueueFamily dstQueueFamily, VkImageUsageFlags usageFlags, GpuImageType type, VkImageLayout dstLayout, VkImageAspectFlags aspectFlags, uint8_t sampleCount)
 {
     ASSERT(image.faceCount == 1 || image.faceCount == 6);
-    GpuImage gpuImage = createGpuImage(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, type, sharingMode, aspectFlags);
+    GpuImage gpuImage = createGpuImage(image.format, { image.width, image.height }, image.levelCount, usageFlags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, type, aspectFlags, sampleCount);
     copyImage(image, gpuImage, dstQueueFamily, dstLayout);
     return gpuImage;
 }

@@ -3,20 +3,39 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-float bloomStrength = 0.04f;
+layout(constant_id = 0) const uint MSAA_SAMPLES = 1; // always a power of 2
+
+layout(push_constant) uniform ConstantBlock
+{
+    float bloomStrength;
+};
+
+const vec2 msaaSampleLocations[31] = vec2[31] // standard MSAA sample locations
+(
+    vec2(0.5, 0.5), // 1
+    vec2(0.75, 0.75),     vec2(0.25, 0.25), // 2
+    vec2(0.375, 0.125),   vec2(0.875, 0.375),   vec2(0.125, 0.625),   vec2(0.625, 0.875), // 4
+    vec2(0.5625, 0.3125), vec2(0.4375, 0.6875), vec2(0.8125, 0.5625), vec2(0.3125, 0.1875), vec2(0.1875, 0.8125), vec2(0.0625, 0.4375), vec2(0.6875, 0.9375), vec2(0.9375, 0.0625), // 8
+    vec2(0.5625, 0.5625), vec2(0.4375, 0.3125), vec2(0.3125, 0.625),  vec2(0.75, 0.4375),   vec2(0.1875, 0.375),  vec2(0.625, 0.8125),  vec2(0.8125, 0.6875), vec2(0.6875, 0.1875), vec2(0.375, 0.875), vec2(0.5, 0.0625), vec2(0.25, 0.125), vec2(0.125, 0.75), vec2(0.0, 0.5), vec2(0.9375, 0.25), vec2(0.875, 0.9375), vec2(0.0625, 0.0) // 16
+);
 
 void main()
 {
-    // mip 1 is the bloom texture, mip 0 is the render target
     // add bloom based on bloom strength and tonemap
-    ivec2 imgSize = imageSize(framebufferImageMips[0]);
+    ivec2 imgSize = imageSize(frameBufferImage);
     ivec2 imgCoords = ivec2(gl_GlobalInvocationID.xy);
     if(any(greaterThanEqual(imgCoords, imgSize)))
         return;
 
-    vec2 texCoords = (imgCoords + 0.5f) / imgSize;
-    vec3 bloomValue = texture(sampler2D(framebufferTextureMips[1], linearClampSampler), texCoords).rgb;
-    vec3 colorValue = imageLoad(framebufferImageMips[0], imgCoords).rgb;
-    vec3 finalValue = reinhardTonemap(mix(colorValue, bloomValue, bloomStrength));
-    imageStore(framebufferImageMips[0], imgCoords, vec4(finalValue, 1.f));
+    vec2 sizeRcp = 1.f / imgSize;
+
+    for(int i = 0; i < MSAA_SAMPLES; i++) // hope the compiler unrolls this
+    {
+        uint index = MSAA_SAMPLES - 1 + i;
+        vec2 samplePosition = (imgCoords + msaaSampleLocations[index]) * sizeRcp;
+        vec3 bloomValue = texture(sampler2D(bloomTextureMips[0], linearClampSampler), samplePosition).rgb;
+        vec3 colorValue = imageLoad(frameBufferImage, imgCoords, i).rgb;
+        vec3 finalValue = reinhardTonemap(mix(colorValue, bloomValue, bloomStrength));
+        imageStore(frameBufferImage, imgCoords, i, vec4(finalValue, 1.f));
+    }
 }

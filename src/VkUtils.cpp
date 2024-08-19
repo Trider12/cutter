@@ -134,9 +134,10 @@ VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageF
     return bufferCreateInfo;
 }
 
-VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, const uint32_t *queueFamilyIndices, uint32_t queueFamilyIndexCount)
+VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, uint32_t sampleCount, const uint32_t *queueFamilyIndices, uint32_t queueFamilyIndexCount)
 {
     ASSERT(queueFamilyIndices && queueFamilyIndexCount || !queueFamilyIndexCount);
+    ASSERT(isPowerOf2(sampleCount) && sampleCount < VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM);
     VkImageCreateInfo imageCreateInfo {};
     imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -144,7 +145,7 @@ VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32
     imageCreateInfo.extent = extent;
     imageCreateInfo.mipLevels = mipLevels;
     imageCreateInfo.arrayLayers = arrayLayers;
-    imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCreateInfo.samples = (VkSampleCountFlagBits)sampleCount;
     imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCreateInfo.usage = usageFlags;
     imageCreateInfo.sharingMode = queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
@@ -353,11 +354,11 @@ VkPipelineRasterizationStateCreateInfo initPipelineRasterizationStateCreateInfo(
     return pipelineRasterizationStateCreateInfo;
 }
 
-VkPipelineMultisampleStateCreateInfo initPipelineMultisampleStateCreateInfo()
+VkPipelineMultisampleStateCreateInfo initPipelineMultisampleStateCreateInfo(uint32_t sampleCount)
 {
     VkPipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo {};
     pipelineMultisampleStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    pipelineMultisampleStateCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    pipelineMultisampleStateCreateInfo.rasterizationSamples = (VkSampleCountFlagBits)sampleCount;
 
     return pipelineMultisampleStateCreateInfo;
 }
@@ -451,15 +452,22 @@ VkComputePipelineCreateInfo initComputePipelineCreateInfo(VkPipelineShaderStageC
     return computePipelineCreateInfo;
 }
 
-VkRenderingAttachmentInfoKHR initRenderingAttachmentInfo(VkImageView imageView, VkImageLayout imageLayout, const VkClearValue *clearValue)
+VkRenderingAttachmentInfoKHR initRenderingAttachmentInfo(VkImageView imageView, VkImageLayout imageLayout, const VkClearValue *clearValue, VkAttachmentStoreOp storeOp, VkImageView  resolveImageView)
 {
     VkRenderingAttachmentInfo renderingAttachmentInfo {};
     renderingAttachmentInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
     renderingAttachmentInfo.imageView = imageView;
     renderingAttachmentInfo.imageLayout = imageLayout;
     renderingAttachmentInfo.loadOp = clearValue ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    renderingAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    renderingAttachmentInfo.storeOp = storeOp;
     renderingAttachmentInfo.clearValue = clearValue ? *clearValue : VkClearValue();
+
+    if (resolveImageView)
+    {
+        renderingAttachmentInfo.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        renderingAttachmentInfo.resolveImageView = resolveImageView;
+        renderingAttachmentInfo.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
     return renderingAttachmentInfo;
 }

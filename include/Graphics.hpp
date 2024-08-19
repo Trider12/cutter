@@ -82,8 +82,6 @@ Cmd allocateCmd(QueueFamily queueFamily);
 
 void freeCmd(Cmd cmd);
 
-enum class SharingMode { Exclusive = 0, Concurrent = 1 };
-
 GpuBuffer createGpuBuffer(uint32_t size,
     VkBufferUsageFlags usageFlags,
     VkMemoryPropertyFlags propertyFlags,
@@ -96,16 +94,16 @@ GpuImage createGpuImage(VkFormat format,
     uint8_t mipLevels,
     VkImageUsageFlags usageFlags,
     GpuImageType type = GpuImageType::Image2D,
-    SharingMode sharingMode = SharingMode::Exclusive,
-    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+    uint32_t sampleCount = 1);
 
 GpuImage createAndCopyGpuImage(const Image &image,
     QueueFamily dstQueueFamily,
     VkImageUsageFlags usageFlags,
     GpuImageType type = GpuImageType::Image2D,
-    SharingMode sharingMode = SharingMode::Exclusive,
     VkImageLayout dstLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+    uint8_t sampleCount = 1);
 
 void destroyGpuImage(GpuImage &image);
 

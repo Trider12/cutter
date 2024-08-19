@@ -33,7 +33,7 @@ VkPresentInfoKHR initPresentInfo(const VkSwapchainKHR *swapchain, const VkSemaph
 
 VkBufferCreateInfo initBufferCreateInfo(uint32_t size, VkBufferUsageFlags usageFlags, const uint32_t *queueFamilyIndices = nullptr, uint32_t queueFamilyIndexCount = 0);
 
-VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, const uint32_t *queueFamilyIndices = nullptr, uint32_t queueFamilyIndexCount = 0);
+VkImageCreateInfo initImageCreateInfo(VkFormat format, VkExtent3D extent, uint32_t mipLevels, uint32_t arrayLayers, VkImageUsageFlags usageFlags, uint32_t sampleCount, const uint32_t *queueFamilyIndices = nullptr, uint32_t queueFamilyIndexCount = 0);
 
 VkImageSubresourceRange initImageSubresourceRange(VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, uint32_t baseMipLevel = 0, uint32_t levelCount = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 0);
 
@@ -72,7 +72,7 @@ VkPipelineViewportStateCreateInfo initPipelineViewportStateCreateInfo();
 
 VkPipelineRasterizationStateCreateInfo initPipelineRasterizationStateCreateInfo(VkPolygonMode polygonMode, VkCullModeFlags cullMode, VkFrontFace frontFace);
 
-VkPipelineMultisampleStateCreateInfo initPipelineMultisampleStateCreateInfo();
+VkPipelineMultisampleStateCreateInfo initPipelineMultisampleStateCreateInfo(uint32_t sampleCount);
 
 VkPipelineDepthStencilStateCreateInfo initPipelineDepthStencilStateCreateInfo(bool depthTestEnable, bool depthWriteEnable, VkCompareOp depthCompareOp, bool stencilTestEnable = false);
 
@@ -97,6 +97,7 @@ VkGraphicsPipelineCreateInfo initGraphicsPipelineCreateInfo(VkPipelineLayout lay
 
 VkComputePipelineCreateInfo initComputePipelineCreateInfo(VkPipelineShaderStageCreateInfo stage, VkPipelineLayout layout);
 
-VkRenderingAttachmentInfoKHR initRenderingAttachmentInfo(VkImageView imageView, VkImageLayout imageLayout, const VkClearValue *clearValue = nullptr);
+VkRenderingAttachmentInfoKHR initRenderingAttachmentInfo(VkImageView imageView, VkImageLayout imageLayout,
+    const VkClearValue *clearValue = nullptr, VkAttachmentStoreOp storeOp = VK_ATTACHMENT_STORE_OP_STORE, VkImageView  resolveImageView = nullptr);
 
 VkRenderingInfoKHR initRenderingInfo(VkExtent2D renderExtent, const VkRenderingAttachmentInfo *colorAttachments, uint32_t colorAttachmentCount, const VkRenderingAttachmentInfo *depthAttachment = nullptr, const VkRenderingAttachmentInfo *stencilAttachment = nullptr);
