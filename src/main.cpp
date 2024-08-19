@@ -113,12 +113,12 @@ const struct SceneImportInfo
     float scalingFactor;
 } sceneInfos[]
 {
-    {glbsPath"Cube.glb",              scenesPath"Cube",              1.f},
-    {glbsPath"ShaderBall.glb",        scenesPath"ShaderBall",        1.f},
-    {glbsPath"Lantern.glb",           scenesPath"Lantern",           0.1f},
-    {glbsPath"WaterBottle.glb",       scenesPath"WaterBottle",       8.f},
-    {glbsPath"SciFiHelmet.glb",       scenesPath"SciFiHelmet",       1.f},
-    {glbsPath"NormalTangentTest.glb", scenesPath"NormalTangentTest", 1.f}
+    {glbsPath"Cube.glb",          scenesPath"Cube",          1.f},
+    {glbsPath"TreasureChest.glb", scenesPath"TreasureChest", 4.f},
+    //{glbsPath"ShaderBall.glb",    scenesPath"ShaderBall",    1.f}, // UVs are not unique, texture painting won't work correctly
+    {glbsPath"Lantern.glb",       scenesPath"Lantern",       0.1f},
+    {glbsPath"WaterBottle.glb",   scenesPath"WaterBottle",   8.f},
+    //{glbsPath"SciFiHelmet.glb",   scenesPath"SciFiHelmet",   1.f} // UVs are not unique, texture painting won't work correctly
 };
 
 const struct MaterialImportInfo
@@ -306,6 +306,7 @@ bool shaderReloadRequired = false;
 bool imguiVulkanResetRequired = false;
 bool lastShaderReloadSuccessful = true;
 bool vSyncOn = true;
+bool fullscreen = false;
 
 uint32_t debugFlags;
 
@@ -1530,161 +1531,186 @@ void drawImgui(Cmd cmd)
     //ImGui::ShowDemoWindow();
     ImGui::Begin(appName, nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
-    if (ImGui::BeginTable("Table", 2, ImGuiTableFlags_NoHostExtendX))
+    if (ImGui::CollapsingHeader("Help"))
     {
-        const char *basename;
-        cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
-        tableCellLabel("Model");
-        if (ImGui::BeginCombo("##Model", basename, ImGuiComboFlags_WidthFitPreview))
-        {
-            for (uint8_t i = 0; i < countOf(sceneInfos); i++)
-            {
-                bool selected = i == selectedScene;
-                cwk_path_get_basename(sceneInfos[i].sceneDirPath, &basename, nullptr);
-                if (ImGui::Selectable(basename, selected) && !selected)
-                {
-                    selectedScene = i;
-                    sceneChangeRequired = true;
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        tableCellLabel("Material");
-        if (ImGui::BeginCombo("##Material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
-        {
-            for (uint8_t i = 0; i < countOf(materialNames); i++)
-            {
-                bool selected = i == selectedMaterial;
-                if (ImGui::Selectable(materialNames[i], selected) && !selected)
-                {
-                    selectedMaterial = i;
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
-        tableCellLabel("Skybox");
-        if (ImGui::BeginCombo("##Skybox", basename, ImGuiComboFlags_WidthFitPreview))
-        {
-            for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
-            {
-                bool selected = i == selectedSkybox;
-                cwk_path_get_basename(hdriImagePaths[i], &basename, nullptr);
-                if (ImGui::Selectable(basename, selected) && !selected)
-                {
-                    selectedSkybox = i;
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        ImGui::TableNextColumn();
-        ImGui::TableNextColumn();
-        sceneChangeRequired = sceneChangeRequired || ImGui::Button("Reset model");
-
-        ImGui::TableNextColumn();
-        ImGui::TableNextColumn();
-        shaderReloadRequired = ImGui::Button("Reload shaders");
-        ImGui::SameLine(0, 0);
-        ImGui::PushStyleColor(ImGuiCol_Text, lastShaderReloadSuccessful ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
-        ImGui::Bullet();
-        ImGui::PopStyleColor();
-
-        tableCellLabel("Cut width");
-        ImGui::SliderFloat("", &cuttingData.width, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
-        tableCellLabel("Rotate model");
-        ImGui::Checkbox("##Rotate model", &rotateScene);
-        tableCellLabel("Show wireframe");
-        ImGui::CheckboxFlags("##Show wireframe", &sceneConfig, SCENE_SHOW_WIREFRAME);
-        tableCellLabel("Use normal map");
-        ImGui::CheckboxFlags("##Use normal map", &sceneConfig, SCENE_USE_NORMAL_MAP);
-        tableCellLabel("Use lights");
-        ImGui::CheckboxFlags("##Use lights", &sceneConfig, SCENE_USE_LIGHTS);
-        tableCellLabel("Use IBL");
-        ImGui::CheckboxFlags("##Use IBL", &sceneConfig, SCENE_USE_IBL);
-
-        tableCellLabel("Bloom strength");
-        ImGui::SliderFloat("##Bloom", &bloomStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
-        tableCellLabel("VSync");
-        if (ImGui::Checkbox("##VSync", &vSyncOn))
-            renderTargetsChangeRequired = true;
-
-        static const uint32_t msaaLevels[] { 2, 4, 8, 16 };
-        static const char *const msaaLevelNames[] { "2", "4", "8", "16" };
-        static uint8_t selectedMsaaLevel = 0;
-
-        tableCellLabel("MSAA");
-        if (ImGui::BeginCombo("##MSAA", msaaLevelNames[selectedMsaaLevel], ImGuiComboFlags_WidthFitPreview))
-        {
-            for (uint8_t i = 0; i < countOf(msaaLevelNames) && msaaLevels[i] <= maxMsaaSampleCount; i++)
-            {
-                bool selected = i == selectedMsaaLevel;
-                if (ImGui::Selectable(msaaLevelNames[i], selected) && !selected)
-                {
-                    selectedMsaaLevel = i;
-                    msaaSampleCount = msaaLevels[selectedMsaaLevel];
-                    shaderReloadRequired = true;
-                    renderTargetsChangeRequired = true;
-                    imguiVulkanResetRequired = true;
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        char buffer[64];
-        snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.vertexCount, maxVertexCount);
-        tableCellLabel("Vertex buffer");
-        ImGui::ProgressBar((float)drawIndirectReadData.vertexCount / maxVertexCount, ImVec2(-FLT_MIN, 0), buffer);
-
-        snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.indexCount, maxIndexCount);
-        tableCellLabel("Index buffer");
-        ImGui::ProgressBar((float)drawIndirectReadData.indexCount / maxIndexCount, ImVec2(-FLT_MIN, 0), buffer);
-
-#ifdef DEBUG
-        static const uint32_t debugChannels[]
-        {
-            0,
-            DEBUG_SHOW_COLOR,
-            DEBUG_SHOW_NORMAL,
-            DEBUG_SHOW_AO,
-            DEBUG_SHOW_ROUGHNESS,
-            DEBUG_SHOW_METALLIC,
-            DEBUG_SHOW_IRRADIANCE,
-            DEBUG_SHOW_PREFILTERED,
-            DEBUG_SHOW_DIFFUSE,
-            DEBUG_SHOW_SPECULAR,
-            DEBUG_SHOW_BURN
-        };
-        static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular", "Burn" };
-        static uint8_t selectedChannel = 0;
-        static_assert(countOf(debugChannels) == countOf(debugChannelNames), "");
-
-        tableCellLabel("Debug Channel");
-        if (ImGui::BeginCombo("##Debug Channel", debugChannelNames[selectedChannel], ImGuiComboFlags_WidthFitPreview))
-        {
-            for (uint8_t i = 0; i < countOf(debugChannelNames); i++)
-            {
-                bool selected = i == selectedChannel;
-                if (ImGui::Selectable(debugChannelNames[i], selected) && !selected)
-                {
-                    selectedChannel = i;
-                    debugFlags = debugChannels[selectedChannel];
-                }
-            }
-            ImGui::EndCombo();
-        }
-#endif // DEBUG
-
-        ImGui::EndTable();
+        ImVec4 green(0.f, 1.f, 0.f, 1.f);
+        ImGui::TextColored(green, "LMB"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to capture the cursor and look around.");
+        ImGui::TextColored(green, "Escape"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to free the cursor.");
+        ImGui::TextColored(green, "W A S D Space Ctrl"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to move.");
+        ImGui::TextColored(green, "RMB"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to start/end a cut line (only with a free cursor).");
     }
 
-    if (ImGui::CollapsingHeader("Lights"))
+    if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        if (ImGui::TreeNode("Dir lights"))
+        if (ImGui::BeginTable("Table", 2, ImGuiTableFlags_NoHostExtendX))
+        {
+            const char *basename;
+            cwk_path_get_basename(sceneInfos[selectedScene].sceneDirPath, &basename, nullptr);
+            tableCellLabel("Model");
+            if (ImGui::BeginCombo("##Model", basename, ImGuiComboFlags_WidthFitPreview))
+            {
+                for (uint8_t i = 0; i < countOf(sceneInfos); i++)
+                {
+                    bool selected = i == selectedScene;
+                    cwk_path_get_basename(sceneInfos[i].sceneDirPath, &basename, nullptr);
+                    if (ImGui::Selectable(basename, selected) && !selected)
+                    {
+                        selectedScene = i;
+                        sceneChangeRequired = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            tableCellLabel("Material");
+            if (ImGui::BeginCombo("##Material", materialNames[selectedMaterial], ImGuiComboFlags_WidthFitPreview))
+            {
+                for (uint8_t i = 0; i < countOf(materialNames); i++)
+                {
+                    bool selected = i == selectedMaterial;
+                    if (ImGui::Selectable(materialNames[i], selected) && !selected)
+                    {
+                        selectedMaterial = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            cwk_path_get_basename(hdriImagePaths[selectedSkybox], &basename, nullptr);
+            tableCellLabel("Skybox");
+            if (ImGui::BeginCombo("##Skybox", basename, ImGuiComboFlags_WidthFitPreview))
+            {
+                for (uint8_t i = 0; i < countOf(hdriImagePaths); i++)
+                {
+                    bool selected = i == selectedSkybox;
+                    cwk_path_get_basename(hdriImagePaths[i], &basename, nullptr);
+                    if (ImGui::Selectable(basename, selected) && !selected)
+                    {
+                        selectedSkybox = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            sceneChangeRequired = sceneChangeRequired || ImGui::Button("Reset model");
+
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            shaderReloadRequired = ImGui::Button("Reload shaders");
+            ImGui::SameLine(0, 0);
+            ImGui::PushStyleColor(ImGuiCol_Text, lastShaderReloadSuccessful ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 0, 0, 255));
+            ImGui::Bullet();
+            ImGui::PopStyleColor();
+
+            tableCellLabel("Cut width");
+            ImGui::SliderFloat("", &cuttingData.width, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+            tableCellLabel("Rotate model");
+            ImGui::Checkbox("##Rotate model", &rotateScene);
+            tableCellLabel("Show wireframe");
+            ImGui::CheckboxFlags("##Show wireframe", &sceneConfig, SCENE_SHOW_WIREFRAME);
+            tableCellLabel("Use lights");
+            ImGui::CheckboxFlags("##Use lights", &sceneConfig, SCENE_USE_LIGHTS);
+            tableCellLabel("Use IBL");
+            ImGui::CheckboxFlags("##Use IBL", &sceneConfig, SCENE_USE_IBL);
+
+            tableCellLabel("Bloom strength");
+            ImGui::SliderFloat("##Bloom", &bloomStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+            static int windowsPosX, windowPosY, windowWidth, windowHeight;
+            tableCellLabel("Fullscreen");
+            if (ImGui::Checkbox("##Fullscreen", &fullscreen))
+            {
+                if (fullscreen)
+                {
+                    glfwGetWindowPos(window, &windowsPosX, &windowPosY);
+                    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+                    GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+                    const GLFWvidmode *mode = glfwGetVideoMode(monitor);
+                    glfwSetWindowMonitor(window, fullscreen ? monitor : nullptr, 0, 0, mode->width, mode->height, mode->refreshRate);
+                }
+                else
+                {
+                    glfwSetWindowMonitor(window, NULL, windowsPosX, windowPosY, windowWidth, windowHeight, 0);
+                }
+            }
+
+            tableCellLabel("VSync");
+            if (ImGui::Checkbox("##VSync", &vSyncOn))
+                renderTargetsChangeRequired = true;
+
+            static const uint32_t msaaLevels[] { 2, 4, 8, 16 };
+            static const char *const msaaLevelNames[] { "2", "4", "8", "16" };
+            static uint8_t selectedMsaaLevel = 0;
+
+            tableCellLabel("MSAA");
+            if (ImGui::BeginCombo("##MSAA", msaaLevelNames[selectedMsaaLevel], ImGuiComboFlags_WidthFitPreview))
+            {
+                for (uint8_t i = 0; i < countOf(msaaLevelNames) && msaaLevels[i] <= maxMsaaSampleCount; i++)
+                {
+                    bool selected = i == selectedMsaaLevel;
+                    if (ImGui::Selectable(msaaLevelNames[i], selected) && !selected)
+                    {
+                        selectedMsaaLevel = i;
+                        msaaSampleCount = msaaLevels[selectedMsaaLevel];
+                        shaderReloadRequired = true;
+                        renderTargetsChangeRequired = true;
+                        imguiVulkanResetRequired = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.vertexCount, maxVertexCount);
+            tableCellLabel("Vertex buffer");
+            ImGui::ProgressBar((float)drawIndirectReadData.vertexCount / maxVertexCount, ImVec2(-FLT_MIN, 0), buffer);
+
+            snprintf(buffer, sizeof(buffer), "%u/%u", drawIndirectReadData.indexCount, maxIndexCount);
+            tableCellLabel("Index buffer");
+            ImGui::ProgressBar((float)drawIndirectReadData.indexCount / maxIndexCount, ImVec2(-FLT_MIN, 0), buffer);
+
+#ifdef DEBUG
+            static const uint32_t debugChannels[]
+            {
+                0,
+                DEBUG_SHOW_COLOR,
+                DEBUG_SHOW_NORMAL,
+                DEBUG_SHOW_AO,
+                DEBUG_SHOW_ROUGHNESS,
+                DEBUG_SHOW_METALLIC,
+                DEBUG_SHOW_IRRADIANCE,
+                DEBUG_SHOW_PREFILTERED,
+                DEBUG_SHOW_DIFFUSE,
+                DEBUG_SHOW_SPECULAR,
+                DEBUG_SHOW_BURN
+            };
+            static const char *const debugChannelNames[] { "None", "Color", "Normal", "AO", "Roughness", "Metallic", "Irradiance", "Prefiltered", "Diffuse", "Specular", "Burn" };
+            static uint8_t selectedChannel = 0;
+            static_assert(countOf(debugChannels) == countOf(debugChannelNames), "");
+
+            tableCellLabel("Debug Channel");
+            if (ImGui::BeginCombo("##Debug Channel", debugChannelNames[selectedChannel], ImGuiComboFlags_WidthFitPreview))
+            {
+                for (uint8_t i = 0; i < countOf(debugChannelNames); i++)
+                {
+                    bool selected = i == selectedChannel;
+                    if (ImGui::Selectable(debugChannelNames[i], selected) && !selected)
+                    {
+                        selectedChannel = i;
+                        debugFlags = debugChannels[selectedChannel];
+                    }
+                }
+                ImGui::EndCombo();
+            }
+#endif // DEBUG
+
+            ImGui::EndTable();
+        }
+
+        if (ImGui::TreeNodeEx("Directional lights", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_NoTreePushOnOpen))
         {
             if (ImGui::BeginTable("##Table", 3, ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_Borders))
             {
@@ -1717,7 +1743,6 @@ void drawImgui(Cmd cmd)
                 }
                 ImGui::EndTable();
             }
-            ImGui::TreePop();
         }
     }
 

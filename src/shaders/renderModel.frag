@@ -79,7 +79,7 @@ void main()
     if(!gl_FrontFacing)
         N = -N;
 
-    if(bool(sceneData.sceneConfig & SCENE_USE_NORMAL_MAP) && isTextureValid(md.normalTexIndex))
+    if(isTextureValid(md.normalTexIndex))
         N = getNormal(N, fsIn.pos, fsIn.uv, md.normalTexIndex);
 
     vec3 albedo = isTextureValid(md.colorTexIndex) ? texture(sampler2D(materialTextures[md.colorTexIndex], linearRepeatSampler), fsIn.uv).rgb : vec3(1.f);
