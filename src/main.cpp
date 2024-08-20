@@ -1137,6 +1137,12 @@ void loadLights()
     vkUpdateDescriptorSets(device, countOf(writes), writes, 0, nullptr);
 }
 
+void resetCamera()
+{
+    camera.getPosition() = glm::vec3(0.f, 1.f, 5.f);
+    camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
+}
+
 void initScene()
 {
     ZoneScoped;
@@ -1145,11 +1151,10 @@ void initScene()
     loadModel(sceneInfos[selectedScene].sceneDirPath);
     loadEnvMaps();
     loadLights();
+    resetCamera();
 
     lineData.width = defaultLineWidth * uiScale;
     cuttingData.width = 0.1f; // 10 cm
-    camera.getPosition() = glm::vec3(0.f, 1.f, 5.f);
-    camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
 }
 
 void terminateScene()
@@ -1199,19 +1204,27 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
     UNUSED(wnd);
     UNUSED(mods);
 
-    if (ImGui::GetIO().WantCaptureMouse || cursorCaptured)
+    if (ImGui::GetIO().WantCaptureMouse)
         return;
 
     if (action == GLFW_PRESS)
     {
-        if (button == GLFW_MOUSE_BUTTON_1 && cutState == CutState::None)
+        switch (button)
         {
-            cursorCaptured = true;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        case GLFW_MOUSE_BUTTON_LEFT:
+        {
+            if (cutState == CutState::None)
+            {
+                cursorCaptured = true;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            }
+            break;
         }
-
-        if (button == GLFW_MOUSE_BUTTON_2)
+        case GLFW_MOUSE_BUTTON_RIGHT:
         {
+            if (cursorCaptured)
+                break;
+
             double x, y;
 
             switch (cutState)
@@ -1229,6 +1242,15 @@ static void glfwMouseButtonCallback(GLFWwindow *wnd, int button, int action, int
             default:
                 break;
             }
+            break;
+        }
+        case GLFW_MOUSE_BUTTON_MIDDLE:
+        {
+            resetCamera();
+            break;
+        }
+        default:
+            break;
         }
     }
 }
@@ -1389,7 +1411,6 @@ void updateLogic(float delta)
     {
         vkDeviceWaitIdle(device);
         loadModel(sceneInfos[selectedScene].sceneDirPath);
-        camera.lookAt(0.5f * (model.aabb.min + model.aabb.max));
         sceneChangeRequired = false;
     }
 
@@ -1534,10 +1555,11 @@ void drawImgui(Cmd cmd)
     if (ImGui::CollapsingHeader("Help"))
     {
         ImVec4 green(0.f, 1.f, 0.f, 1.f);
-        ImGui::TextColored(green, "LMB"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to capture the cursor and look around.");
+        ImGui::TextColored(green, "Left Mouse Button"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to capture the cursor and look around.");
         ImGui::TextColored(green, "Escape"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to free the cursor.");
         ImGui::TextColored(green, "W A S D Space Ctrl"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to move.");
-        ImGui::TextColored(green, "RMB"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to start/end a cut line (only with a free cursor).");
+        ImGui::TextColored(green, "Right Mouse Button"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to start/end a cut line (only with a free cursor).");
+        ImGui::TextColored(green, "Middle Mouse Button"); ImGui::SameLine(0, 0); ImGui::TextUnformatted(" to reset the camera view and position.");
     }
 
     if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
