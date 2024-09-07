@@ -28,8 +28,7 @@ vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
 {
     vec3 normal = texture(sampler2D(materialTextures[normalMapIndex], linearRepeatSampler), uv).rgb;
     normal.xy = normal.xy * 2.f - 1.f;
-    normal.z = sqrt(1.f - dot(normal.xy, normal.xy));
-    normal.y = -normal.y;
+    normal.z = sqrt(max(1.f - dot(normal.xy, normal.xy), 0.f));
 
     vec3 pdx = dFdx(p);
     vec3 pdy = dFdy(p);
@@ -38,7 +37,7 @@ vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
 
     float det = determinant(mat2(uvdx, uvdy));
     vec3 T = normalize(uvdy.y * pdx - uvdx.y * pdy);
-    vec3 B = -normalize(cross(N, T));
+    vec3 B = normalize(cross(N, T));
 
     return normalize(mat3(T, sign(det) * B, N) * normal);
 }

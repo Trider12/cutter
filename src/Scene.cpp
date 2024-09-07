@@ -207,9 +207,9 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                     {
                         VERIFY(cgltf_accessor_read_float(attribute.data, k, values, countOf(values)));
                         NormalUv &normal = scene.normalUvs[oldVertexCount + k];
-                        normal.x = (int8_t)meshopt_quantizeSnorm(values[0], 8);
-                        normal.y = (int8_t)meshopt_quantizeSnorm(values[1], 8);
-                        normal.z = (int8_t)meshopt_quantizeSnorm(values[2], 8);
+                        normal.xyzw = (uint32_t)meshopt_quantizeSnorm(values[0], 8) & 0x000000FF |
+                            (uint32_t)meshopt_quantizeSnorm(values[1], 8) << 8 & 0x0000FF00 |
+                            (uint32_t)meshopt_quantizeSnorm(values[2], 8) << 16 & 0x00FF0000;
                     }
                     break;
                 case cgltf_attribute_type_texcoord:
@@ -217,8 +217,8 @@ void importSceneFromGlb(const char *glbFilePath, const char *sceneDirPath, float
                     {
                         VERIFY(cgltf_accessor_read_float(attribute.data, k, values, countOf(values)));
                         NormalUv &uv = scene.normalUvs[oldVertexCount + k];
-                        uv.u = (uint16_t)meshopt_quantizeHalf(values[0]);
-                        uv.v = (uint16_t)meshopt_quantizeHalf(values[1]);
+                        uv.uv = (uint32_t)meshopt_quantizeSnorm(values[0] / MAX_UV, 16) & 0x0000FFFF |
+                            (uint32_t)meshopt_quantizeSnorm(values[1] / MAX_UV, 16) << 16 & 0xFFFF0000;
                     }
                     break;
                 default:

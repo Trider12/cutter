@@ -7,7 +7,8 @@ void main()
 {
     uint index = readIndices[gl_VertexIndex];
     vec4 pos = vec4(positions[index].x, positions[index].y, positions[index].z, 1.f);
-    vec2 uv = vec2(normalUvs[index].u, 1.f - normalUvs[index].v);
+    vec2 uv = unpackSnorm2x16(normalUvs[index].uv) * MAX_UV;
+    uv.y = 1.f - uv.y;
     TransformData td = transforms[positions[index].transformIndex];
     mat4 modelMat = sceneData.sceneMat * td.toWorldMat;
     mat4 mvp = sceneData.projMat * sceneData.viewMat * modelMat;

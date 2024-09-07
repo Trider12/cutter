@@ -19,6 +19,7 @@
 #define MAX_LIGHTS 16
 #define MAX_MODEL_TEXTURES 64
 #define MAX_PREFILTERED_MAP_LOD 4
+#define MAX_UV 2.f // valid UV coords should in the [-MAX_UV, +MAX_UV] range
 
 #define SCENE_SHOW_WIREFRAME (1u << 0)
 #define SCENE_USE_NORMAL_MAP (1u << 1)
@@ -47,9 +48,8 @@ struct Position
 
 struct NormalUv
 {
-    int8_t x, y, z; // snorm
-    uint8_t effectMask;
-    float16_t u, v;
+    uint32_t xyzw; // snorm 4x8
+    uint32_t uv;   // snorm 2x16
 };
 
 struct MaterialData

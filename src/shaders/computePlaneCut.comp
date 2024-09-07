@@ -8,7 +8,7 @@ layout(push_constant) uniform ConstantBlock
     CuttingData cuttingData;
 };
 
-void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], ivec3 normals[3], vec2 uvs[3], uint16_t transformIndex);
+void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], vec3 normals[3], vec2 uvs[3], uint16_t transformIndex);
 
 void main()
 {
@@ -50,15 +50,15 @@ void main()
         return;
     }
 
-    ivec3 normals[3] = ivec3[](
-        ivec3(normalUvs[triangleIndices[0]].x, normalUvs[triangleIndices[0]].y, normalUvs[triangleIndices[0]].z),
-        ivec3(normalUvs[triangleIndices[1]].x, normalUvs[triangleIndices[1]].y, normalUvs[triangleIndices[1]].z),
-        ivec3(normalUvs[triangleIndices[2]].x, normalUvs[triangleIndices[2]].y, normalUvs[triangleIndices[2]].z));
+    vec3 normals[3] = vec3[](
+        unpackSnorm4x8(normalUvs[triangleIndices[0]].xyzw).xyz,
+        unpackSnorm4x8(normalUvs[triangleIndices[1]].xyzw).xyz,
+        unpackSnorm4x8(normalUvs[triangleIndices[2]].xyzw).xyz);
 
     vec2 uvs[3] = vec2[](
-        vec2(normalUvs[triangleIndices[0]].u, normalUvs[triangleIndices[0]].v),
-        vec2(normalUvs[triangleIndices[1]].u, normalUvs[triangleIndices[1]].v),
-        vec2(normalUvs[triangleIndices[2]].u, normalUvs[triangleIndices[2]].v));
+        unpackSnorm2x16(normalUvs[triangleIndices[0]].uv),
+        unpackSnorm2x16(normalUvs[triangleIndices[1]].uv),
+        unpackSnorm2x16(normalUvs[triangleIndices[2]].uv));
 
     if(any(signsA)) // is intersecting A
         planeCut(drawDataWriteIndex, triangleIndices, signsA, distsA, localPositions, normals, uvs, trianglePositions[0].transformIndex);
@@ -67,7 +67,7 @@ void main()
         planeCut(drawDataWriteIndex, triangleIndices, signsB, distsB, localPositions, normals, uvs, trianglePositions[0].transformIndex);
 }
 
-void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], ivec3 normals[3], vec2 uvs[3], uint16_t transformIndex)
+void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 dists, vec3 localPositions[3], vec3 normals[3], vec2 uvs[3], uint16_t transformIndex)
 {
     //                     |
     //                     |
@@ -111,17 +111,11 @@ void planeCut(uint drawDataWriteIndex, uvec3 triangleIndices, bvec3 signs, vec3 
     p2.transformIndex = transformIndex;
 
     NormalUv nuv1;
-    nuv1.x = int8_t(norm1.x);
-    nuv1.y = int8_t(norm1.y);
-    nuv1.z = int8_t(norm1.z);
-    nuv1.u = float16_t(uv1.x);
-    nuv1.v = float16_t(uv1.y);
+    nuv1.xyzw = packSnorm4x8(vec4(norm1, 0.f));
+    nuv1.uv = packSnorm2x16(uv1);
     NormalUv nuv2;
-    nuv2.x = int8_t(norm2.x);
-    nuv2.y = int8_t(norm2.y);
-    nuv2.z = int8_t(norm2.z);
-    nuv2.u = float16_t(uv2.x);
-    nuv2.v = float16_t(uv2.y);
+    nuv2.xyzw = packSnorm4x8(vec4(norm2, 0.f));
+    nuv2.uv = packSnorm2x16(uv2);
 
     uint index1 = atomicAdd(drawData[drawDataWriteIndex].vertexCount, 2);
     uint index2 = index1 + 1;

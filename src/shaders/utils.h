@@ -8,18 +8,6 @@
 #define ONE_OVER_TWO_PI 0.15915494309
 #define EPSILON         0.00001
 
-vec3 unpackSnorm8(ivec3 snorm)
-{
-    const float scale = float((1 << 7) - 1);
-    return snorm / scale;
-}
-
-float unpackUnorm16(uint unorm)
-{
-    const float scale = float((1 << 16) - 1);
-    return unorm / scale;
-}
-
 float luminance(vec3 color)
 {
     return dot(color, vec3(0.2126f, 0.7152f, 0.0722f));
