@@ -15,8 +15,47 @@ struct Job
     Token token;
 };
 
+class SpinLock
+{
+public:
+    SpinLock() = default;
+
+    bool TryAcquire()
+    {
+        if (atomic.load(std::memory_order_relaxed))
+            return false;
+
+        bool locked = atomic.exchange(true, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        return !locked;
+    }
+
+    void Acquire()
+    {
+        while (!TryAcquire())
+        {
+            CPU_PAUSE();
+        }
+    }
+
+    void Release()
+    {
+        std::atomic_thread_fence(std::memory_order_release);
+        atomic.store(false, std::memory_order_relaxed);
+    }
+
+    // C++ STD compatibility
+    bool try_lock() { return TryAcquire(); }
+    void lock() { Acquire(); }
+    void unlock() { Release(); }
+
+private:
+    std::atomic_bool atomic { false };
+    static_assert(ATOMIC_BOOL_LOCK_FREE, "");
+};
+
 static std::vector<std::thread> threads;
-static TracyLockable(std::mutex, mutex);
+static TracyLockable(SpinLock, spinLock);
 static std::condition_variable_any cond;
 static std::queue<Job> jobs;
 static bool shouldStop;
@@ -29,7 +68,7 @@ static void threadFunc(uint8_t index)
 
     while (true)
     {
-        std::unique_lock<LockableBase(std::mutex)> lock(mutex);
+        std::unique_lock<decltype(spinLock)> lock(spinLock);
         while (!shouldStop && jobs.empty())
         {
             cond.wait(lock);
@@ -83,7 +122,7 @@ void enqueueJob(JobInfo jobInfo, Token token)
     if (token)
         (*(std::atomic_int32_t *)token)++;
 
-    std::unique_lock<LockableBase(std::mutex)> lock(mutex);
+    std::unique_lock<decltype(spinLock)> lock(spinLock);
     jobs.push({ jobInfo.func, jobInfo.userIndex, jobInfo.userData, token });
     lock.unlock();
     cond.notify_one();
@@ -97,7 +136,7 @@ void enqueueJobs(JobInfo *jobInfos, uint32_t jobsCount, Token token)
     if (token)
         (*(std::atomic_int32_t *)token) += jobsCount;
 
-    std::unique_lock<LockableBase(std::mutex)> lock(mutex);
+    std::unique_lock<decltype(spinLock)> lock(spinLock);
     for (uint32_t i = 0; i < jobsCount; i++)
     {
         ASSERT(jobInfos[i].func);
@@ -120,7 +159,7 @@ void terminateJobSystem()
         return;
 
     ASSERT(jobs.empty());
-    std::unique_lock<LockableBase(std::mutex)> lock(mutex);
+    std::unique_lock<decltype(spinLock)> lock(spinLock);
     shouldStop = true;
     lock.unlock();
     cond.notify_all();

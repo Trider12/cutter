@@ -20,6 +20,8 @@
 
 #define NAMEOF(var) #var
 
+#define CPU_PAUSE _mm_pause // TODO: handle non x64
+
 #define defineEnumOperators(enumType, intType) \
 inline intType  operator+(enumType a) { return (intType)a; } \
 inline enumType operator~(enumType a) { return (enumType)(~(intType)a); } \
