@@ -15,19 +15,14 @@ struct Job
     Token token;
 };
 
-class SpinLock
+class alignas(128) SpinLock
 {
 public:
     SpinLock() = default;
 
     bool TryAcquire()
     {
-        if (atomic.load(std::memory_order_relaxed))
-            return false;
-
-        bool locked = atomic.exchange(true, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_acquire);
-        return !locked;
+        return !atomic.load(std::memory_order_relaxed) && !atomic.exchange(true, std::memory_order_acquire);
     }
 
     void Acquire()
@@ -40,8 +35,7 @@ public:
 
     void Release()
     {
-        std::atomic_thread_fence(std::memory_order_release);
-        atomic.store(false, std::memory_order_relaxed);
+        atomic.store(false, std::memory_order_release);
     }
 
     // C++ STD compatibility

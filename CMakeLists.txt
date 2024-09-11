@@ -73,6 +73,7 @@ if(WIN32)
     target_compile_options(cutter PRIVATE
         $<$<NOT:$<CONFIG:DEBUG>>:/Zi>
         /W4
+        /wd4324 # disables the "structure was padded due to alignment specifier" warning
         $<$<NOT:$<CONFIG:DEBUG>>:/WX>
         /external:I ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty
         /external:W0
