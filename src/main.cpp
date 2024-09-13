@@ -654,56 +654,34 @@ void initPipelines()
     pushRange = { VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CuttingData) };
     vkVerify(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePipelineLayout));
 
-    // Model
+    GraphicsPipelineBuilder builder;
     VkPipelineColorBlendAttachmentState blendState {};
     blendState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    VkShaderModule vertexShader = createShaderModuleFromSpv(device, shaderTable.renderModelVertexShader.shaderSpvPath);
-    VkShaderModule fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderModelFragmentShader.shaderSpvPath);
-    VkPipelineShaderStageCreateInfo stages[2];
-    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
-    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    VkPipelineVertexInputStateCreateInfo vertexInputState = initPipelineVertexInputStateCreateInfo(nullptr, 0, nullptr, 0);
-    VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = initPipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    VkPipelineViewportStateCreateInfo viewportState = initPipelineViewportStateCreateInfo();
-    VkPipelineRasterizationStateCreateInfo rasterizationState = initPipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-    VkPipelineMultisampleStateCreateInfo multisampleState = initPipelineMultisampleStateCreateInfo(msaaSampleCount);
-    VkPipelineDepthStencilStateCreateInfo depthStencilState = initPipelineDepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
-    VkPipelineColorBlendStateCreateInfo colorBlendState = initPipelineColorBlendStateCreateInfo(&blendState, 1);
-    VkPipelineDynamicStateCreateInfo dynamicState = initPipelineDynamicStateCreateInfo();
-    VkPipelineRenderingCreateInfoKHR renderingInfo = initPipelineRenderingCreateInfo(&frameBufferImage.format, 1, depthImage.format);
-    VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo = initGraphicsPipelineCreateInfo(graphicsPipelineLayout,
-        stages,
-        countOf(stages),
-        &vertexInputState,
-        &inputAssemblyState,
-        &viewportState,
-        &rasterizationState,
-        &multisampleState,
-        &depthStencilState,
-        &colorBlendState,
-        &dynamicState,
-        &renderingInfo);
-    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &modelPipeline));
-    vkDestroyShaderModule(device, vertexShader, nullptr);
-    vkDestroyShaderModule(device, fragmentShader, nullptr);
+
+    // Model
+    builder.setShaders(shaderTable.renderModelVertexShader.shaderSpvPath, shaderTable.renderModelFragmentShader.shaderSpvPath);
+    builder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    builder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    builder.setCullMode(VK_CULL_MODE_NONE);
+    builder.setFrontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    builder.setMsaaSampleCount(msaaSampleCount);
+    builder.setDepthTest(true);
+    builder.setDepthWrite(true);
+    builder.setDepthCompareOp(VK_COMPARE_OP_GREATER_OR_EQUAL);
+    builder.setBlendStates(&blendState, 1);
+    builder.setAttachmentFormats(&frameBufferImage.format, 1);
+    builder.setDepthFormat(depthImage.format);
+    builder.build(graphicsPipelineLayout, modelPipeline);
 
     // Skybox
-    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderSkyboxVertexShader.shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderSkyboxFragmentShader.shaderSpvPath);
-    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
-    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
-    depthStencilState = initPipelineDepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_GREATER_OR_EQUAL);
-    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &skyboxPipeline));
-    vkDestroyShaderModule(device, vertexShader, nullptr);
-    vkDestroyShaderModule(device, fragmentShader, nullptr);
+    builder.setShaders(shaderTable.renderSkyboxVertexShader.shaderSpvPath, shaderTable.renderSkyboxFragmentShader.shaderSpvPath);
+    builder.setCullMode(VK_CULL_MODE_BACK_BIT);
+    builder.setDepthWrite(false);
+    builder.build(graphicsPipelineLayout, skyboxPipeline);
 
     // Line
-    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderCutLineVertexShader.shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderCutLineFragmentShader.shaderSpvPath);
-    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
-    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
+    builder.setShaders(shaderTable.renderCutLineVertexShader.shaderSpvPath, shaderTable.renderCutLineFragmentShader.shaderSpvPath);
+    builder.setDepthTest(false);
     blendState.blendEnable = true;
     blendState.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -711,18 +689,12 @@ void initPipelines()
     blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     blendState.alphaBlendOp = VK_BLEND_OP_ADD;
-    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &linePipeline));
-    vkDestroyShaderModule(device, vertexShader, nullptr);
-    vkDestroyShaderModule(device, fragmentShader, nullptr);
+    builder.build(graphicsPipelineLayout, linePipeline);
 
     // Burn
-    vertexShader = createShaderModuleFromSpv(device, shaderTable.renderBurnMapVertexShader.shaderSpvPath);
-    fragmentShader = createShaderModuleFromSpv(device, shaderTable.renderBurnMapFragmentShader.shaderSpvPath);
-    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
-    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
-    rasterizationState.cullMode = VK_CULL_MODE_NONE;
-    multisampleState.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
+    builder.setShaders(shaderTable.renderBurnMapVertexShader.shaderSpvPath, shaderTable.renderBurnMapFragmentShader.shaderSpvPath);
+    builder.setCullMode(VK_CULL_MODE_NONE);
+    builder.setMsaaSampleCount(1);
     blendState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
     blendState.colorBlendOp = VK_BLEND_OP_ADD;
@@ -730,10 +702,8 @@ void initPipelines()
     blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     blendState.alphaBlendOp = VK_BLEND_OP_MAX;
     VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    renderingInfo = initPipelineRenderingCreateInfo(&format, 1);
-    vkVerify(vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &burnMapPipeline));
-    vkDestroyShaderModule(device, vertexShader, nullptr);
-    vkDestroyShaderModule(device, fragmentShader, nullptr);
+    builder.setAttachmentFormats(&format, 1);
+    builder.build(graphicsPipelineLayout, burnMapPipeline);
 
     // Cutting
     VkShaderModule computeShader = createShaderModuleFromSpv(device, shaderTable.computePlaneCutComputeShader.shaderSpvPath);

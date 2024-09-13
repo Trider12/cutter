@@ -171,3 +171,42 @@ extern char *stagingBufferMappedData;
 void copyStagingBufferToBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount);
 
 void copyBufferToStagingBuffer(GpuBuffer &buffer, VkBufferCopy *copyRegions, uint32_t copyRegionCount);
+
+class GraphicsPipelineBuilder
+{
+public:
+    GraphicsPipelineBuilder();
+
+    void clear();
+
+    void setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader); // ownsShaders = false. Fragment shader can be nullptr
+    void setShaders(const char *vertexShaderSpvPath, const char *fragmentShaderSpvPath); // ownsShaders = true. Fragment shader can be nullptr
+    void setPrimitiveTopology(VkPrimitiveTopology topology);
+    void setPolygonMode(VkPolygonMode polygonMode);
+    void setCullMode(VkCullModeFlags cullMode);
+    void setFrontFace(VkFrontFace frontFace);
+    void setMsaaSampleCount(uint32_t sampleCount);
+    void setDepthTest(bool enable);
+    void setDepthWrite(bool enable);
+    void setDepthCompareOp(VkCompareOp depthCompareOp);
+    void setStencilTest(bool enable);
+    void setBlendStates(VkPipelineColorBlendAttachmentState *blendStates, uint32_t blendStateCount);
+    void setAttachmentFormats(const VkFormat *colorAttachmentFormats, uint32_t colorAttachmentCount);
+    void setDepthFormat(VkFormat depthAttachmentFormat);
+    void setStencilFormat(VkFormat stencilFormat);
+
+    bool build(VkPipelineLayout pipelineLayout, VkPipeline &pipeline); // destroys shader modules if ownsShaders == true
+
+private:
+    VkPipelineShaderStageCreateInfo stages[2];
+    VkPipelineVertexInputStateCreateInfo vertexInputState;
+    VkPipelineInputAssemblyStateCreateInfo inputAssemblyState;
+    VkPipelineViewportStateCreateInfo viewportState;
+    VkPipelineRasterizationStateCreateInfo rasterizationState;
+    VkPipelineMultisampleStateCreateInfo multisampleState;
+    VkPipelineDepthStencilStateCreateInfo depthStencilState;
+    VkPipelineColorBlendStateCreateInfo colorBlendState;
+    VkPipelineDynamicStateCreateInfo dynamicState;
+    VkPipelineRenderingCreateInfoKHR renderingInfo;
+    bool ownsShaders;
+};

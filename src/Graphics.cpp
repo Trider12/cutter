@@ -6,6 +6,7 @@
 
 #include "DebugUtils.hpp"
 #include "Graphics.hpp"
+#include "ShaderUtils.hpp"
 #include "VkUtils.hpp"
 
 extern VkInstance instance;
@@ -733,4 +734,134 @@ static void copyImageToStagingBuffer(const GpuImage &image, VkBufferImageCopy *c
     vkDestroySemaphore(device, semaphore, nullptr);
     freeCmd(transferCmd);
     freeCmd(srcCmd);
+}
+
+GraphicsPipelineBuilder::GraphicsPipelineBuilder()
+{
+    clear();
+}
+
+void GraphicsPipelineBuilder::clear()
+{
+    vertexInputState = initPipelineVertexInputStateCreateInfo(nullptr, 0, nullptr, 0);
+    inputAssemblyState = initPipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    viewportState = initPipelineViewportStateCreateInfo();
+    rasterizationState = initPipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    multisampleState = initPipelineMultisampleStateCreateInfo(1);
+    depthStencilState = initPipelineDepthStencilStateCreateInfo(false, false, VK_COMPARE_OP_NEVER);
+    colorBlendState = initPipelineColorBlendStateCreateInfo(nullptr, 0);
+    dynamicState = initPipelineDynamicStateCreateInfo();
+    renderingInfo = initPipelineRenderingCreateInfo(nullptr, 0);
+    ownsShaders = false;
+}
+
+void GraphicsPipelineBuilder::setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader)
+{
+    ASSERT(vertexShader);
+    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
+    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
+    ownsShaders = false;
+}
+
+void GraphicsPipelineBuilder::setShaders(const char *vertexShaderSpvPath, const char *fragmentShaderSpvPath)
+{
+    ASSERT(isValidString(vertexShaderSpvPath));
+    VkShaderModule vertexShader = createShaderModuleFromSpv(device, vertexShaderSpvPath);
+    VkShaderModule fragmentShader = isValidString(fragmentShaderSpvPath) ? createShaderModuleFromSpv(device, fragmentShaderSpvPath) : nullptr;
+    stages[0] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader);
+    stages[1] = initPipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader);
+    ownsShaders = true;
+}
+
+void GraphicsPipelineBuilder::setPrimitiveTopology(VkPrimitiveTopology topology)
+{
+    inputAssemblyState.topology = topology;
+}
+
+void GraphicsPipelineBuilder::setPolygonMode(VkPolygonMode polygonMode)
+{
+    rasterizationState.polygonMode = polygonMode;
+}
+
+void GraphicsPipelineBuilder::setCullMode(VkCullModeFlags cullMode)
+{
+    rasterizationState.cullMode = cullMode;
+}
+
+void GraphicsPipelineBuilder::setFrontFace(VkFrontFace frontFace)
+{
+    rasterizationState.frontFace = frontFace;
+}
+
+void GraphicsPipelineBuilder::setMsaaSampleCount(uint32_t sampleCount)
+{
+    multisampleState.rasterizationSamples = (VkSampleCountFlagBits)sampleCount;
+}
+
+void GraphicsPipelineBuilder::setDepthTest(bool enable)
+{
+    depthStencilState.depthTestEnable = enable;
+}
+
+void GraphicsPipelineBuilder::setDepthWrite(bool enable)
+{
+    depthStencilState.depthWriteEnable = enable;
+}
+
+void GraphicsPipelineBuilder::setDepthCompareOp(VkCompareOp depthCompareOp)
+{
+    depthStencilState.depthCompareOp = depthCompareOp;
+}
+
+void GraphicsPipelineBuilder::setStencilTest(bool enable)
+{
+    depthStencilState.stencilTestEnable = enable;
+}
+
+void GraphicsPipelineBuilder::setBlendStates(VkPipelineColorBlendAttachmentState *blendStates, uint32_t blendStateCount)
+{
+    colorBlendState.pAttachments = blendStates;
+    colorBlendState.attachmentCount = blendStateCount;
+}
+
+void GraphicsPipelineBuilder::setAttachmentFormats(const VkFormat *colorAttachmentFormats, uint32_t colorAttachmentCount)
+{
+    renderingInfo.pColorAttachmentFormats = colorAttachmentFormats;
+    renderingInfo.colorAttachmentCount = colorAttachmentCount;
+}
+
+void GraphicsPipelineBuilder::setDepthFormat(VkFormat depthAttachmentFormat)
+{
+    renderingInfo.depthAttachmentFormat = depthAttachmentFormat;
+}
+
+void GraphicsPipelineBuilder::setStencilFormat(VkFormat stencilFormat)
+{
+    renderingInfo.stencilAttachmentFormat = stencilFormat;
+}
+
+bool GraphicsPipelineBuilder::build(VkPipelineLayout pipelineLayout, VkPipeline &pipeline)
+{
+    VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo = initGraphicsPipelineCreateInfo(pipelineLayout,
+        stages,
+        1 + !!stages[1].module,
+        &vertexInputState,
+        &inputAssemblyState,
+        &viewportState,
+        &rasterizationState,
+        &multisampleState,
+        &depthStencilState,
+        &colorBlendState,
+        &dynamicState,
+        &renderingInfo);
+    VkResult result = vkCreateGraphicsPipelines(device, nullptr, 1, &graphicsPipelineCreateInfo, nullptr, &pipeline);
+    vkAssert(result);
+
+    if (ownsShaders)
+    {
+        vkDestroyShaderModule(device, stages[0].module, nullptr);
+        vkDestroyShaderModule(device, stages[1].module, nullptr);
+    }
+
+    return result == VK_SUCCESS;
 }
