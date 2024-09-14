@@ -440,12 +440,13 @@ void initRenderTargets()
     createSwapchain(windowExtent.width, windowExtent.height);
 
     VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
     VkImageUsageFlags usageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     VkImageFormatProperties formatProperties;
-    vkGetPhysicalDeviceImageFormatProperties(physicalDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usageFlags, 0, &formatProperties);
+    vkGetPhysicalDeviceImageFormatProperties(physicalDevice, format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usageFlags, 0, &formatProperties);
     maxMsaaSampleCount = formatProperties.sampleCounts;
-    vkGetPhysicalDeviceImageFormatProperties(physicalDevice, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &formatProperties);
+    vkGetPhysicalDeviceImageFormatProperties(physicalDevice, depthFormat, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &formatProperties);
     maxMsaaSampleCount &= formatProperties.sampleCounts; // yes, this isn't max actually
 
     // mip 0 for rendering, mips 1-n for bloom bluring
@@ -462,7 +463,7 @@ void initRenderTargets()
         GpuImageType::Image2D, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     setGpuImageName(resolveImage, NAMEOF(resolveImage));
 
-    depthImage = createGpuImage(VK_FORMAT_D32_SFLOAT, windowExtent, 1,
+    depthImage = createGpuImage(depthFormat, windowExtent, 1,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         GpuImageType::Image2D, VK_IMAGE_ASPECT_DEPTH_BIT, msaaSampleCount);
     setGpuImageName(depthImage, NAMEOF(depthImage));
@@ -693,7 +694,6 @@ void initPipelines()
 
     // Burn
     builder.setShaders(shaderTable.renderBurnMapVertexShader.shaderSpvPath, shaderTable.renderBurnMapFragmentShader.shaderSpvPath);
-    builder.setCullMode(VK_CULL_MODE_NONE);
     builder.setMsaaSampleCount(1);
     blendState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
@@ -1381,6 +1381,7 @@ void updateLogic(float delta)
     {
         vkDeviceWaitIdle(device);
         loadModel(sceneInfos[selectedScene].sceneDirPath);
+        resetCamera();
         sceneChangeRequired = false;
     }
 
@@ -1446,7 +1447,7 @@ void updateUniforms(const FrameData &frame)
 void drawModel(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "Model");
+    ScopedGpuZone(cmd, __FUNCTION__);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1472,7 +1473,7 @@ void drawModel(Cmd cmd)
 void drawSkybox(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "Skybox");
+    ScopedGpuZone(cmd, __FUNCTION__);
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
     vkCmdDraw(cmd.commandBuffer, 3, 1, 0, 0);
 }
@@ -1480,7 +1481,7 @@ void drawSkybox(Cmd cmd)
 void drawLine(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "Line");
+    ScopedGpuZone(cmd, __FUNCTION__);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1513,7 +1514,7 @@ static inline void tableCellLabel(const char *label)
 void drawImgui(Cmd cmd)
 {
     ZoneScoped;
-    ScopedGpuZone(cmd, "ImGui");
+    ScopedGpuZone(cmd, __FUNCTION__);
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
