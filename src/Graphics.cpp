@@ -793,6 +793,11 @@ void GraphicsPipelineBuilder::setFrontFace(VkFrontFace frontFace)
     rasterizationState.frontFace = frontFace;
 }
 
+void GraphicsPipelineBuilder::setLineWidth(float width)
+{
+    rasterizationState.lineWidth = width;
+}
+
 void GraphicsPipelineBuilder::setMsaaSampleCount(uint32_t sampleCount)
 {
     multisampleState.rasterizationSamples = (VkSampleCountFlagBits)sampleCount;

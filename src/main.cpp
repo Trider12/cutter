@@ -90,6 +90,8 @@ struct ShaderTable
 {
     defineShader(renderModel, ".vert", Vertex);
     defineShader(renderModel, ".frag", Fragment);
+    defineShader(renderWireframe, ".vert", Vertex);
+    defineShader(renderWireframe, ".frag", Fragment);
     defineShader(renderSkybox, ".vert", Vertex);
     defineShader(renderSkybox, ".frag", Fragment);
     defineShader(renderCutLine, ".vert", Vertex);
@@ -226,6 +228,7 @@ VkDescriptorSet globalDescriptorSet;
 VkPipelineLayout graphicsPipelineLayout;
 VkPipelineLayout computePipelineLayout;
 VkPipeline modelPipeline;
+VkPipeline wireframePipeline;
 VkPipeline skyboxPipeline;
 VkPipeline linePipeline;
 VkPipeline cuttingPipeline;
@@ -337,6 +340,8 @@ void initVulkan()
     features.shaderSampledImageArrayDynamicIndexing = true;
     features.textureCompressionBC = true;
     features.shaderStorageImageMultisample = true;
+    features.fillModeNonSolid = true;
+    features.wideLines = true;
     VkPhysicalDeviceVulkan11Features features11 {};
     features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     features11.storageBuffer16BitAccess = true;
@@ -674,10 +679,17 @@ void initPipelines()
     builder.setDepthFormat(depthImage.format);
     builder.build(graphicsPipelineLayout, modelPipeline);
 
+    // Wireframe
+    builder.setShaders(shaderTable.renderWireframeVertexShader.shaderSpvPath, shaderTable.renderWireframeFragmentShader.shaderSpvPath);
+    builder.setPolygonMode(VK_POLYGON_MODE_LINE);
+    builder.setLineWidth(1.5f);
+    builder.setDepthWrite(false);
+    builder.build(graphicsPipelineLayout, wireframePipeline);
+
     // Skybox
     builder.setShaders(shaderTable.renderSkyboxVertexShader.shaderSpvPath, shaderTable.renderSkyboxFragmentShader.shaderSpvPath);
+    builder.setPolygonMode(VK_POLYGON_MODE_FILL);
     builder.setCullMode(VK_CULL_MODE_BACK_BIT);
-    builder.setDepthWrite(false);
     builder.build(graphicsPipelineLayout, skyboxPipeline);
 
     // Line
@@ -734,6 +746,7 @@ void terminatePipelines()
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
     vkDestroyPipeline(device, modelPipeline, nullptr);
+    vkDestroyPipeline(device, wireframePipeline, nullptr);
     vkDestroyPipeline(device, skyboxPipeline, nullptr);
     vkDestroyPipeline(device, cuttingPipeline, nullptr);
     vkDestroyPipeline(device, linePipeline, nullptr);
@@ -852,7 +865,7 @@ void loadModel(const char *sceneDirPath)
     {
         uint32_t maxBufferSize = maxMaterialsOffset + maxMaterialsSize;
         modelBuffer = createGpuBuffer(maxBufferSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
         setGpuBufferName(modelBuffer, NAMEOF(modelBuffer));
     }
@@ -912,12 +925,13 @@ void loadModel(const char *sceneDirPath)
     };
     copyStagingBufferToBuffer(modelBuffer, copies, countOf(copies));
 
-    static_assert(offsetof(DrawIndirectData, vertexCount) == sizeof(VkDrawIndirectCommand), "");
+    static_assert(offsetof(DrawIndirectData, vertexCount) == sizeof(VkDrawIndexedIndirectCommand), "");
 
     drawDataReadIndex = 0;
     drawIndirectReadData.indexCount = (uint32_t)model.indices.size();
     drawIndirectReadData.instanceCount = 1;
-    drawIndirectReadData.firstVertex = 0;
+    drawIndirectReadData.firstIndex = 0;
+    drawIndirectReadData.vertexOffset = 0;
     drawIndirectReadData.firstInstance = 0;
     drawIndirectReadData.vertexCount = (uint32_t)model.positions.size();
     memcpy(drawIndirectBuffer.mappedData, &drawIndirectReadData, sizeof(DrawIndirectData));
@@ -1449,25 +1463,19 @@ void drawModel(Cmd cmd)
     ZoneScoped;
     ScopedGpuZone(cmd, __FUNCTION__);
 
-    VkViewport viewport {};
-    viewport.x = 0;
-    viewport.y = (float)frameBufferImage.extent.height;
-    viewport.width = (float)frameBufferImage.extent.width;
-    viewport.height = -(float)frameBufferImage.extent.height;
-    viewport.minDepth = 0.f;
-    viewport.maxDepth = 1.f;
-    vkCmdSetViewport(cmd.commandBuffer, 0, 1, &viewport);
-
-    VkRect2D scissor {};
-    scissor.offset.x = 0;
-    scissor.offset.y = 0;
-    scissor.extent.width = frameBufferImage.extent.width;
-    scissor.extent.height = frameBufferImage.extent.height;
-    vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
-
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, modelPipeline);
     uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
-    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
+    vkCmdDrawIndexedIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
+}
+
+void drawWireframe(Cmd cmd)
+{
+    ZoneScoped;
+    ScopedGpuZone(cmd, __FUNCTION__);
+
+    vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframePipeline);
+    uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
+    vkCmdDrawIndexedIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
 }
 
 void drawSkybox(Cmd cmd)
@@ -1802,6 +1810,7 @@ void burnMapPass(Cmd cmd)
     PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
     vkCmdPushConstants(cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
     vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdBindIndexBuffer(cmd.commandBuffer, modelBuffer.buffer, dynamicOffsets.offsets[0], VK_INDEX_TYPE_UINT32);
 
     VkViewport viewport {};
     viewport.x = 0;
@@ -1820,7 +1829,7 @@ void burnMapPass(Cmd cmd)
 
     vkCmdBindPipeline(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, burnMapPipeline);
     uint32_t drawIndirectDataReadOffset = drawDataReadIndex * sizeof(DrawIndirectData);
-    vkCmdDrawIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
+    vkCmdDrawIndexedIndirect(cmd.commandBuffer, drawIndirectBuffer.buffer, drawIndirectDataReadOffset, 1, 0);
 
     vkCmdEndRenderingKHR(cmd.commandBuffer);
 
@@ -1870,8 +1879,27 @@ void mainGeometryPass(Cmd cmd)
     PushData pushData { selectedSkybox, selectedMaterial, timeSinceStart, debugFlags, lineData, cuttingData };
     vkCmdPushConstants(cmd.commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
     vkCmdBindDescriptorSets(cmd.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &globalDescriptorSet, dynamicOffsets.offsetCount, dynamicOffsets.offsets);
+    vkCmdBindIndexBuffer(cmd.commandBuffer, modelBuffer.buffer, dynamicOffsets.offsets[0], VK_INDEX_TYPE_UINT32);
+
+    VkViewport viewport {};
+    viewport.x = 0;
+    viewport.y = (float)frameBufferImage.extent.height;
+    viewport.width = (float)frameBufferImage.extent.width;
+    viewport.height = -(float)frameBufferImage.extent.height;
+    viewport.minDepth = 0.f;
+    viewport.maxDepth = 1.f;
+    vkCmdSetViewport(cmd.commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor {};
+    scissor.offset.x = 0;
+    scissor.offset.y = 0;
+    scissor.extent.width = frameBufferImage.extent.width;
+    scissor.extent.height = frameBufferImage.extent.height;
+    vkCmdSetScissor(cmd.commandBuffer, 0, 1, &scissor);
 
     drawModel(cmd);
+    if (sceneConfig & SCENE_SHOW_WIREFRAME)
+        drawWireframe(cmd);
     drawSkybox(cmd);
     vkCmdEndRenderingKHR(cmd.commandBuffer);
 }

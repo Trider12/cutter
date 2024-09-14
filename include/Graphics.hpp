@@ -185,6 +185,7 @@ public:
     void setPolygonMode(VkPolygonMode polygonMode);
     void setCullMode(VkCullModeFlags cullMode);
     void setFrontFace(VkFrontFace frontFace);
+    void setLineWidth(float width);
     void setMsaaSampleCount(uint32_t sampleCount);
     void setDepthTest(bool enable);
     void setDepthWrite(bool enable);

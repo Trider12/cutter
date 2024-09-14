@@ -5,7 +5,6 @@ struct VsOut
 {
     vec3 pos;
     vec3 norm;
-    vec3 bary;
     vec2 uv;
 };
 
@@ -40,13 +39,6 @@ vec3 getNormal(vec3 N, vec3 p, vec2 uv, uint normalMapIndex)
     vec3 B = normalize(cross(N, T));
 
     return normalize(mat3(T, sign(det) * B, N) * normal);
-}
-
-float edgeFactor(vec3 bary)
-{
-    const float thickness = 1.f;
-    vec3 a3 = smoothstep(vec3(0.f), fwidth(bary) * thickness, bary);
-    return 1.f - min(min(a3.x, a3.y), a3.z);
 }
 
 bool isTextureValid(uint textureIndex)
@@ -176,10 +168,6 @@ void main()
             break;
     }
 #endif // DEBUG
-
-    const vec3 wireframeColor = vec3(0.f);
-    if(bool(sceneData.sceneConfig & SCENE_SHOW_WIREFRAME))
-        outColor = mix(outColor, wireframeColor, edgeFactor(fsIn.bary));
 
     outFragColor = vec4(outColor, 1.f);
 }

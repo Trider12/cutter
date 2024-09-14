@@ -119,12 +119,13 @@ struct PushData // yes, this can be optimized
 
 struct DrawIndirectData
 {
-    // start of VkDrawIndirectCommand
-    uint32_t indexCount; // used as vertexCount for vkCmdDrawIndirect
+    // start of VkDrawIndexedIndirectCommand
+    uint32_t indexCount;
     uint32_t instanceCount;
-    uint32_t firstVertex;
+    uint32_t firstIndex;
+    int32_t  vertexOffset;
     uint32_t firstInstance;
-    // end of VkDrawIndirectCommand
+    // end of VkDrawIndexedIndirectCommand
     uint32_t vertexCount;
 };
 
